@@ -1,68 +1,87 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import bcrypt from "bcryptjs";
+
 import { prisma } from "@/src/lib/prisma";
 
-export async function POST(request: Request) {
+const registerSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, { message: "Nama wajib diisi." }) 
+    .min(4, { message: "Nama minimal 4 karakter." }),
+  email: z
+    .string()
+    .trim()
+    .min(1, { message: "Email wajib diisi." }) 
+    .toLowerCase() 
+    .email({ message: "Format email tidak valid." }),
+  password: z
+    .string()
+    .min(1, { message: "Password wajib diisi." })
+    .min(8, { message: "Password minimal 8 karakter." })
+    .regex(/[A-Z]/, 
+      { message: "Password harus mengandung huruf kapital." })
+    .refine((password) => /[a-z]/.test(password),
+      {message: "Password harus mengandung minimal 1 huruf kecil."})
+    .refine((password) => /[0-9]/.test(password),
+      {message: "Password harus mengandung minimal 1 angka"})
+    .refine((password) => /[^A-Za-z0-9]/.test(password),
+      {message: "Password harus mengandung minimal 1 karakter khusus"}),
+});
+
+export async function POST(req: Request) {
   try {
-    const body = await request.json();
+    // Ambil data dari request body dan validasi menggunakan registerSchema
+    const body = await req.json();
 
-    const name = String(body.name ?? "").trim();
-    const email = String(body.email ?? "").trim().toLowerCase();
-    const password = String(body.password ?? "");
+    // Validasi data menggunakan Zod
+    const result = registerSchema.safeParse(body);
 
-    if (!name || !email || !password) {
+    if (!result.success) {
       return NextResponse.json(
-        {
-          message: "Nama, email, dan password wajib diisi.",
+        { 
+          message: "Data registrasi tidak valid.",
+          errors: result.error.flatten().fieldErrors 
         },
-        {
-          status: 400,
-        },
+        { status: 400 }
       );
     }
 
-    if (password.length < 6) {
-      return NextResponse.json(
-        {
-          message: "Password minimal 6 karakter.",
-        },
-        {
-          status: 400,
-        },
-      );
-    }
+    //Ambil data yang sudah tervalidasi
+    const { name, email, password } = result.data;
 
+    // Cek apakah email sudah terdaftar
     const existingUser = await prisma.user.findUnique({
-      where: {
-        email,
-      },
+      where: { email },
     });
 
     if (existingUser) {
       return NextResponse.json(
-        {
-          message: "Email sudah terdaftar.",
+        { 
+          message: "Email sudah terdaftar." 
         },
-        {
-          status: 409,
-        },
+        { status: 400 }
       );
     }
 
-    const passwordHash = await bcrypt.hash(password, 12);
+    // Hash password sebelum disimpan ke database
+    const hashedPassword = await bcrypt.hash(password, 12);
 
+    //Buat user baru di database
     const user = await prisma.user.create({
       data: {
         name,
         email,
-        passwordHash,
+        passwordHash: hashedPassword,
         role: "USER",
       },
     });
 
+    // Kirim response berhasil
     return NextResponse.json(
       {
-        message: "Register berhasil.",
+        message: "Registrasi berhasil.",
         user: {
           id: user.id,
           name: user.name,
@@ -70,20 +89,16 @@ export async function POST(request: Request) {
           role: user.role,
         },
       },
-      {
-        status: 201,
-      },
+      { status: 201 }
     );
   } catch (error) {
-    console.error("REGISTER_ERROR:", error);
-
+    console.error("Error saat registrasi:", error);
     return NextResponse.json(
-      {
-        message: "Terjadi kesalahan pada server.",
+      { 
+        message: "Terjadi kesalahan saat registrasi." 
       },
-      {
-        status: 500,
-      },
+      { status: 500 }
     );
   }
 }
+
