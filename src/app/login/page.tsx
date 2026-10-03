@@ -220,6 +220,15 @@ export default function LoginPage() {
             Register
           </Link>
         </p>
+
+        <div className="text-center mt-2">
+          <Link
+            href="/forgot-password"
+            className="text-sm text-slate-600 underline hover:text-black"
+          >
+            Lupa password?
+          </Link>
+        </div>
       </div>
     </main>
   );
