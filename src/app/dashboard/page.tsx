@@ -6,13 +6,14 @@ import { prisma } from "@/src/lib/prisma";
 import DashboardNavbar from "./DashboardNavbar";
 
 export default async function DashboardPage() {
-//Check session
+  // Cek session
   const session = await getSession();
 
   if (!session) {
     redirect("/login");
   }
-//Ambil data user dari database berdasarkan session
+
+  // Ambil data user dari database
   const user = await prisma.user.findUnique({
     where: {
       id: session.userId,
@@ -21,16 +22,17 @@ export default async function DashboardPage() {
       name: true,
       email: true,
       role: true,
+      avatar: true,
     },
   });
-//Jika user tidak ditemukan, redirect ke halaman login
+
+  // Jika user tidak ditemukan
   if (!user) {
     redirect("/login");
   }
 
   return (
     <main className="min-h-screen bg-slate-100">
-
       <DashboardNavbar user={user} />
 
       <section className="mx-auto max-w-7xl p-6">
