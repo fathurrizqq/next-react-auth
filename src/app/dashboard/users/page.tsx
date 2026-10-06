@@ -16,8 +16,20 @@ type User = {
   role: UserRole;
   avatar: string | null;
   isActive: boolean;
+
+  // Digunakan untuk menentukan Online / Offline
+  lastSeen: string | null;
+
   createdAt: string;
 };
+
+// User dianggap online jika lastSeen masih dalam 60 detik
+// yang sama dengan sistem heartbeat navbar.
+const ONLINE_THRESHOLD = 60 * 1000;
+
+// Refresh data User Management setiap 20 detik.
+// Sama dengan interval heartbeat navbar.
+const REFRESH_INTERVAL = 20 * 1000;
 
 export default function UserManagementPage() {
   const router = useRouter();
@@ -58,6 +70,32 @@ export default function UserManagementPage() {
     useState(true);
 
   // =========================================
+  // CEK ONLINE / OFFLINE
+  // =========================================
+
+  function isUserOnline(
+    lastSeen: string | null,
+  ) {
+    if (!lastSeen) {
+      return false;
+    }
+
+    const lastSeenTime =
+      new Date(lastSeen).getTime();
+
+    if (Number.isNaN(lastSeenTime)) {
+      return false;
+    }
+
+    const now = Date.now();
+
+    return (
+      now - lastSeenTime <=
+      ONLINE_THRESHOLD
+    );
+  }
+
+  // =========================================
   // GET USERS
   // =========================================
 
@@ -79,14 +117,6 @@ export default function UserManagementPage() {
           return;
         }
 
-        /*
-         * Jangan langsung redirect ke dashboard
-         * ketika 403.
-         *
-         * Kita tampilkan error supaya kita bisa
-         * mengetahui apakah API menolak
-         * SUPER_ADMIN.
-         */
         if (response.status === 403) {
           setError(
             data.message ??
@@ -103,6 +133,7 @@ export default function UserManagementPage() {
       }
 
       setUsers(data.users ?? []);
+
       setError("");
     } catch (error) {
       console.error(
@@ -139,10 +170,6 @@ export default function UserManagementPage() {
 
         const data = await response.json();
 
-        /*
-         * Jangan update state jika component
-         * sudah tidak aktif.
-         */
         if (cancelled) {
           return;
         }
@@ -171,6 +198,7 @@ export default function UserManagementPage() {
         }
 
         setUsers(data.users ?? []);
+
         setError("");
       } catch (error) {
         if (cancelled) {
@@ -198,6 +226,36 @@ export default function UserManagementPage() {
       cancelled = true;
     };
   }, [router]);
+
+  // =========================================
+  // AUTO REFRESH STATUS ONLINE / OFFLINE
+  // =========================================
+  //
+  // User Management akan mengambil lastSeen
+  // terbaru setiap 20 detik.
+  //
+  // Contoh:
+  //
+  // User masih membuka dashboard
+  // -> heartbeat setiap 20 detik
+  // -> lastSeen terus berubah
+  // -> Online
+  //
+  // User menutup browser
+  // -> heartbeat berhenti
+  // -> lastSeen tidak berubah
+  // -> setelah > 60 detik menjadi Offline
+  //
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      loadUsers();
+    }, REFRESH_INTERVAL);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, []);
 
   // =========================================
   // OPEN EDIT MODAL
@@ -279,10 +337,13 @@ export default function UserManagementPage() {
           },
           body: JSON.stringify({
             name: editName.trim(),
+
             email: editEmail
               .trim()
               .toLowerCase(),
+
             role: editRole,
+
             isActive: editActive,
           }),
         },
@@ -442,83 +503,104 @@ export default function UserManagementPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {cardUsers.map((user) => (
-              <div
-                key={user.id}
-                className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3"
-              >
-                {/* USER INFO */}
+            {cardUsers.map((user) => {
+              const online =
+                isUserOnline(
+                  user.lastSeen,
+                );
 
-                <div className="flex min-w-0 items-center gap-3">
-                  {/* AVATAR */}
+              return (
+                <div
+                  key={user.id}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3"
+                >
+                  {/* USER INFO */}
 
-                  <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full border border-slate-200">
-                    <Image
-                      src={
-                        user.avatar ??
-                        "/default-avatar.svg"
-                      }
-                      alt={`Avatar ${user.name}`}
-                      fill
-                      sizes="40px"
-                      className="object-cover"
-                    />
-                  </div>
+                  <div className="flex min-w-0 items-center gap-3">
+                    {/* AVATAR */}
 
-                  {/* NAME / EMAIL / STATUS */}
+                    <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full border border-slate-200">
+                      <Image
+                        src={
+                          user.avatar ??
+                          "/default-avatar.svg"
+                        }
+                        alt={`Avatar ${user.name}`}
+                        fill
+                        sizes="40px"
+                        className="object-cover"
+                      />
 
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">
-                      {user.name}
-                    </p>
+                      {/* ONLINE DOT */}
 
-                    <p className="truncate text-xs text-slate-500">
-                      {user.email}
-                    </p>
+                      <span
+                        className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white ${
+                          online
+                            ? "bg-green-500"
+                            : "bg-slate-300"
+                        }`}
+                      />
+                    </div>
 
-                    <div className="mt-1">
-                      {user.isActive ? (
-                        <span className="text-xs text-green-600">
-                          Aktif
-                        </span>
-                      ) : (
-                        <span className="text-xs text-red-600">
-                          Tidak aktif
-                        </span>
-                      )}
+                    {/* NAME / EMAIL / STATUS */}
+
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {user.name}
+                      </p>
+
+                      <p className="truncate text-xs text-slate-500">
+                        {user.email}
+                      </p>
+
+                      {/* ONLINE / OFFLINE */}
+
+                      <div className="mt-1">
+                        {online ? (
+                          <span className="text-xs font-medium text-green-600">
+                            Online
+                          </span>
+                        ) : (
+                          <span className="text-xs font-medium text-slate-400">
+                            Offline
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
+
+                  {/* ACTION */}
+
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openEditModal(user)
+                      }
+                      disabled={deleting}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Edit
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleDeleteUser(
+                          user,
+                        )
+                      }
+                      disabled={deleting}
+                      className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {deleting
+                        ? "..."
+                        : "Hapus"}
+                    </button>
+                  </div>
                 </div>
-
-                {/* ACTION */}
-
-                <div className="flex shrink-0 gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      openEditModal(user)
-                    }
-                    disabled={deleting}
-                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Edit
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleDeleteUser(user)
-                    }
-                    disabled={deleting}
-                    className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {deleting
-                      ? "..."
-                      : "Hapus"}
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -532,9 +614,7 @@ export default function UserManagementPage() {
   return (
     <main className="min-h-screen bg-slate-100">
       <div className="mx-auto max-w-7xl px-6 py-8">
-        {/* =========================================
-            HEADER
-        ========================================= */}
+        {/* HEADER */}
 
         <div className="mb-6 flex items-center justify-between">
           <div>
@@ -559,9 +639,7 @@ export default function UserManagementPage() {
           </button>
         </div>
 
-        {/* =========================================
-            ERROR
-        ========================================= */}
+        {/* ERROR */}
 
         {error && (
           <div className="mb-6 rounded-lg bg-red-50 p-3 text-sm text-red-600">
@@ -569,9 +647,7 @@ export default function UserManagementPage() {
           </div>
         )}
 
-        {/* =========================================
-            LOADING
-        ========================================= */}
+        {/* LOADING */}
 
         {loading ? (
           <div className="rounded-xl bg-white p-8 text-center text-sm text-slate-500">
@@ -645,9 +721,7 @@ export default function UserManagementPage() {
               </button>
             </div>
 
-            {/* =========================================
-                FORM
-            ========================================= */}
+            {/* FORM */}
 
             <div className="space-y-4">
               {/* NAME */}
@@ -724,7 +798,7 @@ export default function UserManagementPage() {
                 </select>
               </div>
 
-              {/* STATUS */}
+              {/* ACCOUNT ACTIVE */}
 
               <label className="flex items-center gap-3 rounded-lg border border-slate-200 p-3">
                 <input

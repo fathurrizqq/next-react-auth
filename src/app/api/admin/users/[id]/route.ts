@@ -1,14 +1,23 @@
 import { NextResponse } from "next/server";
+
 import { z } from "zod";
 
 import { prisma } from "@/src/lib/prisma";
+
 import { getSession } from "@/src/lib/session";
+
+// =========================================
+// UPDATE SCHEMA
+// =========================================
 
 const updateUserSchema = z.object({
   name: z
     .string()
     .trim()
-    .min(4, "Nama minimal 4 karakter."),
+    .min(
+      4,
+      "Nama minimal 4 karakter.",
+    ),
 
   email: z
     .string()
@@ -24,6 +33,10 @@ const updateUserSchema = z.object({
 
   isActive: z.boolean(),
 });
+
+// =========================================
+// ROUTE CONTEXT
+// =========================================
 
 type RouteContext = {
   params: Promise<{
@@ -74,9 +87,21 @@ export async function PATCH(
       );
     }
 
+    // =========================================
+    // AMBIL ID
+    // =========================================
+
     const { id } = await context.params;
 
+    // =========================================
+    // AMBIL BODY
+    // =========================================
+
     const body = await request.json();
+
+    // =========================================
+    // VALIDASI
+    // =========================================
 
     const result =
       updateUserSchema.safeParse(body);
@@ -86,6 +111,7 @@ export async function PATCH(
         {
           message:
             "Data user tidak valid.",
+
           errors:
             result.error.flatten()
               .fieldErrors,
@@ -128,7 +154,7 @@ export async function PATCH(
 
     // =========================================
     // JANGAN IZINKAN SUPER ADMIN
-    // MENGHAPUS HAK DIRINYA SENDIRI
+    // MENURUNKAN ROLE DIRINYA SENDIRI
     // =========================================
 
     if (
@@ -145,6 +171,11 @@ export async function PATCH(
         },
       );
     }
+
+    // =========================================
+    // JANGAN IZINKAN SUPER ADMIN
+    // MENONAKTIFKAN DIRI SENDIRI
+    // =========================================
 
     if (
       user.id === session.userId &&
@@ -188,7 +219,7 @@ export async function PATCH(
     }
 
     // =========================================
-    // UPDATE
+    // UPDATE USER
     // =========================================
 
     const updatedUser =
@@ -196,25 +227,44 @@ export async function PATCH(
         where: {
           id,
         },
+
         data: {
           name,
+
           email,
+
           role,
+
           isActive,
         },
+
         select: {
           id: true,
+
           name: true,
+
           email: true,
+
           role: true,
+
           avatar: true,
+
           isActive: true,
+
+          // lastSeen tidak perlu diubah.
+          // lastSeen hanya di-update oleh
+          // heartbeat navbar.
         },
       });
+
+    // =========================================
+    // RETURN
+    // =========================================
 
     return NextResponse.json({
       message:
         "User berhasil diperbarui.",
+
       user: updatedUser,
     });
   } catch (error) {
@@ -278,6 +328,10 @@ export async function DELETE(
       );
     }
 
+    // =========================================
+    // AMBIL ID
+    // =========================================
+
     const { id } = await context.params;
 
     // =========================================
@@ -328,6 +382,10 @@ export async function DELETE(
         id,
       },
     });
+
+    // =========================================
+    // RETURN
+    // =========================================
 
     return NextResponse.json({
       message:

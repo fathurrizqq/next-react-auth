@@ -7,8 +7,11 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 
+import OnlineUsers from "./OnlineUsers";
+
 type DashboardNavbarProps = {
   user: {
+    id: string;
     name: string;
     email: string;
     role: string;
@@ -503,6 +506,7 @@ export default function DashboardNavbar({
 
       <header className="border-b bg-white">
         <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between px-6">
+
           {/* =========================================
               USER PROFILE
           ========================================= */}
@@ -550,10 +554,19 @@ export default function DashboardNavbar({
           </button>
 
           {/* =========================================
+              ONLINE USERS
+          ========================================= */}
+
+          <OnlineUsers
+            currentUserId={user.id}
+          />
+
+          {/* =========================================
               RIGHT MENU
           ========================================= */}
 
           <div className="flex items-center gap-2">
+
             {/* SUPER ADMIN */}
 
             {user.role ===
@@ -604,6 +617,7 @@ export default function DashboardNavbar({
           }}
         >
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+
             {/* =========================================
                 HEADER
             ========================================= */}
@@ -678,6 +692,7 @@ export default function DashboardNavbar({
             ========================================= */}
 
             <div className="space-y-4">
+
               {/* NAME */}
 
               <div>
@@ -690,8 +705,7 @@ export default function DashboardNavbar({
                   value={profileName}
                   onChange={(event) =>
                     setProfileName(
-                      event.target
-                        .value,
+                      event.target.value,
                     )
                   }
                   disabled={
@@ -715,8 +729,7 @@ export default function DashboardNavbar({
                   value={profileEmail}
                   onChange={(event) =>
                     setProfileEmail(
-                      event.target
-                        .value,
+                      event.target.value,
                     )
                   }
                   disabled={
@@ -801,6 +814,7 @@ export default function DashboardNavbar({
               </p>
 
               <div className="space-y-3">
+
                 {/* CURRENT PASSWORD */}
 
                 <div>

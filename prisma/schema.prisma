@@ -26,6 +26,7 @@ model User {
   role         UserRole @default(USER)
   avatar       String?
   isActive     Boolean  @default(true)
+  lastSeen DateTime?
 
   passwordResetTokens PasswordResetToken[]
 

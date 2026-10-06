@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/src/lib/prisma";
+
 import { getSession } from "@/src/lib/session";
+
+// =========================================
+// GET USERS
+// =========================================
 
 export async function GET() {
   try {
@@ -43,25 +48,52 @@ export async function GET() {
     // AMBIL SEMUA USER
     // =========================================
 
-    const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        avatar: true,
-        isActive: true,
-        createdAt: true,
-      },
-      orderBy: [
-        {
-          role: "asc",
+    const users =
+      await prisma.user.findMany({
+        select: {
+          id: true,
+
+          name: true,
+
+          email: true,
+
+          role: true,
+
+          avatar: true,
+
+          // =====================================
+          // PENTING
+          // =====================================
+          // lastSeen digunakan oleh User
+          // Management untuk menentukan
+          // Online / Offline.
+          // =====================================
+
+          lastSeen: true,
+
+          // isActive tetap digunakan untuk
+          // status akun aktif/nonaktif ketika
+          // melakukan edit user.
+
+          isActive: true,
+
+          createdAt: true,
         },
-        {
-          name: "asc",
-        },
-      ],
-    });
+
+        orderBy: [
+          {
+            role: "asc",
+          },
+
+          {
+            name: "asc",
+          },
+        ],
+      });
+
+    // =========================================
+    // RETURN
+    // =========================================
 
     return NextResponse.json({
       users,
