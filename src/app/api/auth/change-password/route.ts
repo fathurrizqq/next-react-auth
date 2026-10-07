@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 
 import { prisma } from "@/src/lib/prisma";
 import { getSession } from "@/src/lib/session";
+import { requireSameOrigin } from "@/src/lib/security";
 
 const changePasswordSchema = z
   .object({
@@ -12,13 +13,18 @@ const changePasswordSchema = z
       .min(
         1,
         "Password lama wajib diisi.",
-      ),
+      )
+      .max(72),
 
     newPassword: z
       .string()
       .min(
         8,
         "Password baru minimal 8 karakter.",
+      )
+      .max(
+        72,
+        "Password baru maksimal 72 karakter.",
       )
       .regex(
         /[A-Z]/,
@@ -42,7 +48,8 @@ const changePasswordSchema = z
       .min(
         1,
         "Konfirmasi password wajib diisi.",
-      ),
+      )
+      .max(72),
   })
   .refine(
     (data) =>
@@ -55,13 +62,13 @@ const changePasswordSchema = z
     },
   );
 
-export async function POST(
-  request: Request,
-) {
+export async function POST(request: Request) {
   try {
-    // ================================
-    // 1. CEK SESSION
-    // ================================
+    const originError = requireSameOrigin(request);
+
+    if (originError) {
+      return originError;
+    }
 
     const session = await getSession();
 
@@ -71,26 +78,14 @@ export async function POST(
           message:
             "Anda harus login terlebih dahulu.",
         },
-        {
-          status: 401,
-        },
+        { status: 401 },
       );
     }
 
-    // ================================
-    // 2. AMBIL BODY
-    // ================================
-
     const body = await request.json();
 
-    // ================================
-    // 3. VALIDASI DATA
-    // ================================
-
     const result =
-      changePasswordSchema.safeParse(
-        body,
-      );
+      changePasswordSchema.safeParse(body);
 
     if (!result.success) {
       return NextResponse.json(
@@ -98,12 +93,9 @@ export async function POST(
           message:
             "Data password tidak valid.",
           errors:
-            result.error.flatten()
-              .fieldErrors,
+            result.error.flatten().fieldErrors,
         },
-        {
-          status: 400,
-        },
+        { status: 400 },
       );
     }
 
@@ -112,32 +104,27 @@ export async function POST(
       newPassword,
     } = result.data;
 
-    // ================================
-    // 4. CARI USER
-    // ================================
-
     const user =
       await prisma.user.findUnique({
         where: {
           id: session.userId,
         },
+        select: {
+          id: true,
+          passwordHash: true,
+          isActive: true,
+        },
       });
 
-    if (!user) {
+    if (!user || !user.isActive) {
       return NextResponse.json(
         {
           message:
-            "User tidak ditemukan.",
+            "Akun tidak dapat digunakan.",
         },
-        {
-          status: 404,
-        },
+        { status: 401 },
       );
     }
-
-    // ================================
-    // 5. CEK PASSWORD LAMA
-    // ================================
 
     const passwordMatch =
       await bcrypt.compare(
@@ -149,17 +136,11 @@ export async function POST(
       return NextResponse.json(
         {
           message:
-            "Password lama yang kamu masukkan salah.",
+            "Password lama salah.",
         },
-        {
-          status: 401,
-        },
+        { status: 401 },
       );
     }
-
-    // ================================
-    // 6. CEK PASSWORD BARU
-    // ================================
 
     const samePassword =
       await bcrypt.compare(
@@ -171,46 +152,57 @@ export async function POST(
       return NextResponse.json(
         {
           message:
-            "Password baru tidak boleh sama dengan password lama.",
+            "Password baru harus berbeda dari password lama.",
         },
-        {
-          status: 400,
-        },
+        { status: 400 },
       );
     }
 
-    // ================================
-    // 7. HASH PASSWORD BARU
-    // ================================
-
-    const newPasswordHash =
+    const passwordHash =
       await bcrypt.hash(
         newPassword,
         12,
       );
 
-    // ================================
-    // 8. UPDATE DATABASE
-    // ================================
+    await prisma.$transaction([
+      prisma.user.update({
+        where: {
+          id: user.id,
+        },
+        data: {
+          passwordHash,
+        },
+      }),
 
-    await prisma.user.update({
-      where: {
-        id: user.id,
+      prisma.passwordResetToken.deleteMany({
+        where: {
+          userId: user.id,
+        },
+      }),
+    ]);
+
+    /*
+     * Untuk arsitektur JWT saat ini:
+     * session yang sedang aktif masih dapat hidup
+     * sampai expiry.
+     *
+     * Setelah schema sessionVersion ditambahkan,
+     * bagian ini akan dibuat invalidate semua session.
+     */
+
+    return NextResponse.json(
+      {
+        message:
+          "Password berhasil diubah.",
       },
-      data: {
-        passwordHash:
-          newPasswordHash,
+      {
+        status: 200,
+        headers: {
+          "Cache-Control":
+            "no-store",
+        },
       },
-    });
-
-    // ================================
-    // 9. RESPONSE
-    // ================================
-
-    return NextResponse.json({
-      message:
-        "Password berhasil diubah.",
-    });
+    );
   } catch (error) {
     console.error(
       "CHANGE_PASSWORD_ERROR:",
@@ -220,11 +212,9 @@ export async function POST(
     return NextResponse.json(
       {
         message:
-          "Terjadi kesalahan saat mengubah password.",
+          "Terjadi kesalahan pada server.",
       },
-      {
-        status: 500,
-      },
+      { status: 500 },
     );
   }
 }

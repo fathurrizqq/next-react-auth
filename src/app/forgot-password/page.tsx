@@ -1,6 +1,10 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import {
+  FormEvent,
+  useState,
+} from "react";
+
 import Link from "next/link";
 
 export default function ForgotPasswordPage() {
@@ -44,7 +48,8 @@ export default function ForgotPasswordPage() {
                 "application/json",
             },
             body: JSON.stringify({
-              email,
+              email:
+                email.trim().toLowerCase(),
             }),
           },
         );
@@ -77,14 +82,14 @@ export default function ForgotPasswordPage() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
       <div className="w-full max-w-md rounded-xl bg-white p-8 shadow">
-        <h1 className="text-2xl font-bold">
+        <h1 className="text-2xl font-bold text-slate-900">
           Lupa Password
         </h1>
 
-        <p className="mt-2 mb-6 text-sm text-slate-500">
-          Masukkan email akun kamu. Kami akan
-          mengirimkan link untuk membuat password
-          baru.
+        <p className="mb-6 mt-2 text-sm text-slate-500">
+          Masukkan email akun kamu.
+          Kami akan mengirimkan link
+          untuk membuat password baru.
         </p>
 
         <form
@@ -94,7 +99,7 @@ export default function ForgotPasswordPage() {
           <div>
             <label
               htmlFor="email"
-              className="mb-1 block text-sm font-medium"
+              className="mb-1 block text-sm font-medium text-slate-700"
             >
               Email
             </label>
@@ -109,8 +114,9 @@ export default function ForgotPasswordPage() {
                 )
               }
               placeholder="email@example.com"
-              className="w-full rounded-lg border px-3 py-2 outline-none focus:border-black"
               autoComplete="email"
+              disabled={loading}
+              className="w-full rounded-lg border px-3 py-2 outline-none focus:border-black disabled:bg-slate-50"
             />
           </div>
 
@@ -129,7 +135,7 @@ export default function ForgotPasswordPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-black px-4 py-2 text-white disabled:opacity-50"
+            className="w-full rounded-lg bg-black px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading
               ? "Mengirim..."
@@ -138,8 +144,7 @@ export default function ForgotPasswordPage() {
         </form>
 
         <p className="mt-6 text-center text-sm text-slate-500">
-          Ingat password?
-          {" "}
+          Ingat password?{" "}
           <Link
             href="/login"
             className="font-medium text-black underline"

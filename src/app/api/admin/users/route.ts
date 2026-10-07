@@ -1,19 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/src/lib/prisma";
-
 import { getSession } from "@/src/lib/session";
-
-// =========================================
-// GET USERS
-// =========================================
 
 export async function GET() {
   try {
-    // =========================================
-    // CEK SESSION
-    // =========================================
-
     const session = await getSession();
 
     if (!session) {
@@ -22,15 +13,9 @@ export async function GET() {
           message:
             "Anda harus login terlebih dahulu.",
         },
-        {
-          status: 401,
-        },
+        { status: 401 },
       );
     }
-
-    // =========================================
-    // CEK SUPER ADMIN
-    // =========================================
 
     if (session.role !== "SUPER_ADMIN") {
       return NextResponse.json(
@@ -38,66 +23,41 @@ export async function GET() {
           message:
             "Anda tidak memiliki akses.",
         },
-        {
-          status: 403,
-        },
+        { status: 403 },
       );
     }
-
-    // =========================================
-    // AMBIL SEMUA USER
-    // =========================================
 
     const users =
       await prisma.user.findMany({
         select: {
           id: true,
-
           name: true,
-
           email: true,
-
           role: true,
-
           avatar: true,
-
-          // =====================================
-          // PENTING
-          // =====================================
-          // lastSeen digunakan oleh User
-          // Management untuk menentukan
-          // Online / Offline.
-          // =====================================
-
           lastSeen: true,
-
-          // isActive tetap digunakan untuk
-          // status akun aktif/nonaktif ketika
-          // melakukan edit user.
-
           isActive: true,
-
-          createdAt: true,
         },
-
         orderBy: [
           {
             role: "asc",
           },
-
           {
             name: "asc",
           },
         ],
       });
 
-    // =========================================
-    // RETURN
-    // =========================================
-
-    return NextResponse.json({
-      users,
-    });
+    return NextResponse.json(
+      { users },
+      {
+        status: 200,
+        headers: {
+          "Cache-Control":
+            "no-store",
+        },
+      },
+    );
   } catch (error) {
     console.error(
       "GET_ADMIN_USERS_ERROR:",
@@ -109,9 +69,7 @@ export async function GET() {
         message:
           "Terjadi kesalahan saat mengambil data user.",
       },
-      {
-        status: 500,
-      },
+      { status: 500 },
     );
   }
 }

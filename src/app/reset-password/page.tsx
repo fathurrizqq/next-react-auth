@@ -6,25 +6,34 @@ import {
 } from "react";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useSearchParams } from "next/navigation";
+import {
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 
 export default function ResetPasswordPage() {
   const router = useRouter();
+
   const searchParams =
     useSearchParams();
 
   const token =
     searchParams.get("token") ?? "";
 
-  const [newPassword, setNewPassword] =
-    useState("");
+  const [
+    newPassword,
+    setNewPassword,
+  ] = useState("");
 
-  const [confirmPassword, setConfirmPassword] =
-    useState("");
+  const [
+    confirmPassword,
+    setConfirmPassword,
+  ] = useState("");
 
-  const [showPassword, setShowPassword] =
-    useState(false);
+  const [
+    showPassword,
+    setShowPassword,
+  ] = useState(false);
 
   const [
     showConfirmPassword,
@@ -39,6 +48,25 @@ export default function ResetPasswordPage() {
 
   const [loading, setLoading] =
     useState(false);
+
+  const passwordRules = {
+    minLength:
+      newPassword.length >= 8,
+
+    uppercase:
+      /[A-Z]/.test(newPassword),
+
+    lowercase:
+      /[a-z]/.test(newPassword),
+
+    number:
+      /[0-9]/.test(newPassword),
+
+    special:
+      /[^A-Za-z0-9]/.test(
+        newPassword,
+      ),
+  };
 
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>,
@@ -58,6 +86,19 @@ export default function ResetPasswordPage() {
     if (!newPassword) {
       setError(
         "Password baru wajib diisi.",
+      );
+      return;
+    }
+
+    if (
+      !passwordRules.minLength ||
+      !passwordRules.uppercase ||
+      !passwordRules.lowercase ||
+      !passwordRules.number ||
+      !passwordRules.special
+    ) {
+      setError(
+        "Password belum memenuhi semua persyaratan.",
       );
       return;
     }
@@ -114,7 +155,7 @@ export default function ResetPasswordPage() {
         "Password berhasil direset. Mengarahkan ke halaman login...",
       );
 
-      setTimeout(() => {
+      window.setTimeout(() => {
         router.push("/login");
       }, 1500);
     } catch {
@@ -129,12 +170,13 @@ export default function ResetPasswordPage() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
       <div className="w-full max-w-md rounded-xl bg-white p-8 shadow">
-        <h1 className="text-2xl font-bold">
+        <h1 className="text-2xl font-bold text-slate-900">
           Reset Password
         </h1>
 
-        <p className="mt-2 mb-6 text-sm text-slate-500">
-          Buat password baru untuk akun kamu.
+        <p className="mb-6 mt-2 text-sm text-slate-500">
+          Buat password baru untuk
+          akun kamu.
         </p>
 
         <form
@@ -142,12 +184,16 @@ export default function ResetPasswordPage() {
           className="space-y-4"
         >
           <div>
-            <label className="mb-1 block text-sm font-medium">
+            <label
+              htmlFor="newPassword"
+              className="mb-1 block text-sm font-medium"
+            >
               Password Baru
             </label>
 
             <div className="relative">
               <input
+                id="newPassword"
                 type={
                   showPassword
                     ? "text"
@@ -159,18 +205,21 @@ export default function ResetPasswordPage() {
                     event.target.value,
                   )
                 }
-                className="w-full rounded-lg border px-3 py-2 pr-12"
+                className="w-full rounded-lg border px-3 py-2 pr-20"
                 placeholder="Password baru"
                 autoComplete="new-password"
+                disabled={loading}
               />
 
               <button
                 type="button"
                 onClick={() =>
                   setShowPassword(
-                    (value) => !value,
+                    (value) =>
+                      !value,
                   )
                 }
+                disabled={loading}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500"
               >
                 {showPassword
@@ -178,15 +227,56 @@ export default function ResetPasswordPage() {
                   : "Lihat"}
               </button>
             </div>
+
+            <div className="mt-2 space-y-1 text-xs">
+              <PasswordRule
+                valid={
+                  passwordRules.minLength
+                }
+                text="Minimal 8 karakter"
+              />
+
+              <PasswordRule
+                valid={
+                  passwordRules.uppercase
+                }
+                text="Minimal 1 huruf kapital"
+              />
+
+              <PasswordRule
+                valid={
+                  passwordRules.lowercase
+                }
+                text="Minimal 1 huruf kecil"
+              />
+
+              <PasswordRule
+                valid={
+                  passwordRules.number
+                }
+                text="Minimal 1 angka"
+              />
+
+              <PasswordRule
+                valid={
+                  passwordRules.special
+                }
+                text="Minimal 1 karakter khusus"
+              />
+            </div>
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">
+            <label
+              htmlFor="confirmPassword"
+              className="mb-1 block text-sm font-medium"
+            >
               Ulangi Password Baru
             </label>
 
             <div className="relative">
               <input
+                id="confirmPassword"
                 type={
                   showConfirmPassword
                     ? "text"
@@ -200,18 +290,21 @@ export default function ResetPasswordPage() {
                     event.target.value,
                   )
                 }
-                className="w-full rounded-lg border px-3 py-2 pr-12"
+                className="w-full rounded-lg border px-3 py-2 pr-20"
                 placeholder="Ulangi password baru"
                 autoComplete="new-password"
+                disabled={loading}
               />
 
               <button
                 type="button"
                 onClick={() =>
                   setShowConfirmPassword(
-                    (value) => !value,
+                    (value) =>
+                      !value,
                   )
                 }
+                disabled={loading}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500"
               >
                 {showConfirmPassword
@@ -219,20 +312,22 @@ export default function ResetPasswordPage() {
                   : "Lihat"}
               </button>
             </div>
-          </div>
 
-          <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-            <p className="font-medium">
-              Password harus memiliki:
-            </p>
-
-            <ul className="mt-1 space-y-1">
-              <li>• Minimal 8 karakter</li>
-              <li>• Huruf kapital</li>
-              <li>• Huruf kecil</li>
-              <li>• Angka</li>
-              <li>• Karakter khusus</li>
-            </ul>
+            {confirmPassword && (
+              <p
+                className={`mt-1 text-xs ${
+                  newPassword ===
+                  confirmPassword
+                    ? "text-green-600"
+                    : "text-red-500"
+                }`}
+              >
+                {newPassword ===
+                confirmPassword
+                  ? "Password cocok."
+                  : "Password tidak sama."}
+              </p>
+            )}
           </div>
 
           {error && (
@@ -268,5 +363,25 @@ export default function ResetPasswordPage() {
         </p>
       </div>
     </main>
+  );
+}
+
+function PasswordRule({
+  valid,
+  text,
+}: {
+  valid: boolean;
+  text: string;
+}) {
+  return (
+    <p
+      className={
+        valid
+          ? "text-green-600"
+          : "text-slate-400"
+      }
+    >
+      {valid ? "✓" : "○"} {text}
+    </p>
   );
 }

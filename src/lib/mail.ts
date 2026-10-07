@@ -28,67 +28,71 @@ const transporter =
     },
   });
 
+function escapeHtml(
+  value: string,
+): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 export async function sendPasswordResetEmail(
   email: string,
   resetUrl: string,
 ) {
+  const safeUrl =
+    escapeHtml(resetUrl);
+
   await transporter.sendMail({
-    from: `"Auth System" <${gmailUser}>`,
+    from: `"Contractor Management" <${gmailUser}>`,
+
     to: email,
-    subject: "Reset Password",
 
-    text: `
-Anda menerima email ini karena ada permintaan untuk mereset password akun Anda.
+    subject:
+      "Reset Password - Contractor Management",
 
-Klik link berikut untuk membuat password baru:
-
-${resetUrl}
-
-Link ini berlaku selama 30 menit.
-
-Jika Anda tidak meminta reset password, abaikan email ini.
-`,
+    text:
+      `Kami menerima permintaan reset password.\n\n` +
+      `Gunakan link berikut untuk membuat password baru:\n` +
+      `${resetUrl}\n\n` +
+      `Link berlaku selama 30 menit.\n\n` +
+      `Jika kamu tidak meminta reset password, abaikan email ini.`,
 
     html: `
-      <div style="font-family: Arial, sans-serif; line-height: 1.6;">
-        <h2>Reset Password</h2>
+      <!DOCTYPE html>
+      <html lang="id">
+        <body style="font-family: Arial, sans-serif; line-height: 1.6;">
+          <h2>Reset Password</h2>
 
-        <p>
-          Kami menerima permintaan untuk mereset
-          password akun Anda.
-        </p>
+          <p>
+            Kami menerima permintaan untuk
+            mengatur ulang password akun kamu.
+          </p>
 
-        <p>
-          Klik tombol berikut untuk membuat
-          password baru:
-        </p>
+          <p>
+            Link reset password berlaku selama
+            <strong>30 menit</strong>.
+          </p>
 
-        <p>
-          <a
-            href="${resetUrl}"
-            style="
-              display:inline-block;
-              padding:12px 20px;
-              background:#000;
-              color:#fff;
-              text-decoration:none;
-              border-radius:6px;
-            "
-          >
-            Reset Password
-          </a>
-        </p>
+          <p>
+            <a
+              href="${safeUrl}"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Reset Password
+            </a>
+          </p>
 
-        <p>
-          Link ini berlaku selama
-          <strong>30 menit</strong>.
-        </p>
-
-        <p>
-          Jika Anda tidak meminta reset password,
-          abaikan email ini.
-        </p>
-      </div>
+          <p>
+            Jika kamu tidak meminta reset password,
+            abaikan email ini.
+          </p>
+        </body>
+      </html>
     `,
   });
 }

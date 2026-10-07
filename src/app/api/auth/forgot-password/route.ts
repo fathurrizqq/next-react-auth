@@ -1,9 +1,17 @@
 import { NextResponse } from "next/server";
-import { randomBytes, createHash } from "crypto";
+import {
+  randomBytes,
+  createHash,
+} from "crypto";
 import { z } from "zod";
 
 import { prisma } from "@/src/lib/prisma";
-import { sendPasswordResetEmail } from "@/src/lib/mail";
+import {
+  sendPasswordResetEmail,
+} from "@/src/lib/mail";
+import {
+  requireSameOrigin,
+} from "@/src/lib/security";
 
 const forgotPasswordSchema =
   z.object({
@@ -13,30 +21,37 @@ const forgotPasswordSchema =
       .toLowerCase()
       .email(
         "Format email tidak valid.",
-      ),
+      )
+      .max(254),
   });
 
-export async function POST(
-  request: Request,
-) {
+const GENERIC_MESSAGE =
+  "Jika email terdaftar, link reset password akan dikirim.";
+
+export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const originError =
+      requireSameOrigin(request);
+
+    if (originError) {
+      return originError;
+    }
+
+    const body =
+      await request.json();
 
     const result =
-      forgotPasswordSchema.safeParse(body);
+      forgotPasswordSchema.safeParse(
+        body,
+      );
 
     if (!result.success) {
       return NextResponse.json(
         {
           message:
-            "Email tidak valid.",
-          errors:
-            result.error.flatten()
-              .fieldErrors,
+            "Format email tidak valid.",
         },
-        {
-          status: 400,
-        },
+        { status: 400 },
       );
     }
 
@@ -47,38 +62,53 @@ export async function POST(
         where: {
           email,
         },
+        select: {
+          id: true,
+          email: true,
+          isActive: true,
+        },
       });
 
-    // Jangan memberi tahu apakah email ada
-    if (!user) {
-      return NextResponse.json({
-        message:
-          "Jika email terdaftar, link reset password akan dikirim.",
-      });
+    /*
+     * Jangan memberitahu apakah email
+     * benar-benar terdaftar.
+     */
+    if (!user || !user.isActive) {
+      return NextResponse.json(
+        {
+          message: GENERIC_MESSAGE,
+        },
+        {
+          status: 200,
+          headers: {
+            "Cache-Control":
+              "no-store",
+          },
+        },
+      );
     }
 
-    // Hapus token lama
-    await prisma.passwordResetToken.deleteMany({
-      where: {
-        userId: user.id,
+    await prisma.passwordResetToken.deleteMany(
+      {
+        where: {
+          userId: user.id,
+        },
       },
-    });
+    );
 
-    // Buat token random
     const rawToken =
       randomBytes(32).toString("hex");
 
-    // Hash token sebelum disimpan
     const tokenHash =
       createHash("sha256")
         .update(rawToken)
         .digest("hex");
 
-    // Token berlaku 30 menit
-    const expiresAt = new Date(
-      Date.now() +
-        30 * 60 * 1000,
-    );
+    const expiresAt =
+      new Date(
+        Date.now() +
+          30 * 60 * 1000,
+      );
 
     await prisma.passwordResetToken.create({
       data: {
@@ -89,21 +119,47 @@ export async function POST(
     });
 
     const appUrl =
-      process.env.APP_URL ??
-      "http://localhost:3000";
+      process.env.APP_URL;
+
+    if (!appUrl) {
+      throw new Error(
+        "APP_URL belum diset.",
+      );
+    }
 
     const resetUrl =
-      `${appUrl}/reset-password?token=${rawToken}`;
+      `${appUrl.replace(/\/$/, "")}` +
+      `/reset-password?token=${rawToken}`;
 
-    await sendPasswordResetEmail(
-      user.email,
-      resetUrl,
+    try {
+      await sendPasswordResetEmail(
+        user.email,
+        resetUrl,
+      );
+    } catch (error) {
+      await prisma.passwordResetToken.deleteMany(
+        {
+          where: {
+            userId: user.id,
+          },
+        },
+      );
+
+      throw error;
+    }
+
+    return NextResponse.json(
+      {
+        message: GENERIC_MESSAGE,
+      },
+      {
+        status: 200,
+        headers: {
+          "Cache-Control":
+            "no-store",
+        },
+      },
     );
-
-    return NextResponse.json({
-      message:
-        "Jika email terdaftar, link reset password akan dikirim.",
-    });
   } catch (error) {
     console.error(
       "FORGOT_PASSWORD_ERROR:",
@@ -115,9 +171,7 @@ export async function POST(
         message:
           "Terjadi kesalahan saat memproses permintaan.",
       },
-      {
-        status: 500,
-      },
+      { status: 500 },
     );
   }
 }

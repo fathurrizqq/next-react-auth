@@ -24,21 +24,12 @@ export default function DashboardNavbar({
 }: DashboardNavbarProps) {
   const router = useRouter();
 
-  // =========================================
-  // LOGOUT
-  // =========================================
+  // Logout
+  const [loading, setLoading] = useState(false);
 
-  const [loading, setLoading] =
+  // Profile
+  const [showProfileModal, setShowProfileModal] =
     useState(false);
-
-  // =========================================
-  // PROFILE MODAL
-  // =========================================
-
-  const [
-    showProfileModal,
-    setShowProfileModal,
-  ] = useState(false);
 
   const [profileName, setProfileName] =
     useState(user.name);
@@ -61,58 +52,44 @@ export default function DashboardNavbar({
   const [profileError, setProfileError] =
     useState("");
 
-  // =========================================
-  // CHANGE PASSWORD
-  // =========================================
-
-  const [
-    currentPassword,
-    setCurrentPassword,
-  ] = useState("");
+  // Password
+  const [currentPassword, setCurrentPassword] =
+    useState("");
 
   const [newPassword, setNewPassword] =
     useState("");
 
-  const [
-    confirmPassword,
-    setConfirmPassword,
-  ] = useState("");
+  const [confirmPassword, setConfirmPassword] =
+    useState("");
 
-  const [
-    showCurrentPassword,
-    setShowCurrentPassword,
-  ] = useState(false);
+  const [showCurrentPassword, setShowCurrentPassword] =
+    useState(false);
 
-  const [
-    showNewPassword,
-    setShowNewPassword,
-  ] = useState(false);
+  const [showNewPassword, setShowNewPassword] =
+    useState(false);
 
-  const [
-    showConfirmPassword,
-    setShowConfirmPassword,
-  ] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] =
+    useState(false);
 
-  const [
-    passwordLoading,
-    setPasswordLoading,
-  ] = useState(false);
+  const [passwordLoading, setPasswordLoading] =
+    useState(false);
 
-  const [
-    passwordMessage,
-    setPasswordMessage,
-  ] = useState("");
+  const [passwordMessage, setPasswordMessage] =
+    useState("");
 
-  const [
-    passwordError,
-    setPasswordError,
-  ] = useState("");
+  const [passwordError, setPasswordError] =
+    useState("");
 
-  // =========================================
+  const isLoading =
+    profileLoading || passwordLoading;
+
+  // ==============================
   // LOGOUT
-  // =========================================
+  // ==============================
 
   async function handleLogout() {
+    if (loading) return;
+
     try {
       setLoading(true);
 
@@ -124,9 +101,7 @@ export default function DashboardNavbar({
       );
 
       if (!response.ok) {
-        throw new Error(
-          "Logout gagal",
-        );
+        throw new Error("Logout gagal");
       }
 
       router.push("/login");
@@ -141,12 +116,11 @@ export default function DashboardNavbar({
     }
   }
 
-  // =========================================
-  // OPEN PROFILE
-  // =========================================
+  // ==============================
+  // PROFILE MODAL
+  // ==============================
 
-  function handleOpenProfile() {
-    // Ambil data terbaru dari props
+  function resetProfileForm() {
     setProfileName(user.name);
     setProfileEmail(user.email);
 
@@ -155,7 +129,9 @@ export default function DashboardNavbar({
 
     setProfileMessage("");
     setProfileError("");
+  }
 
+  function resetPasswordForm() {
     setCurrentPassword("");
     setNewPassword("");
     setConfirmPassword("");
@@ -166,123 +142,96 @@ export default function DashboardNavbar({
     setShowCurrentPassword(false);
     setShowNewPassword(false);
     setShowConfirmPassword(false);
+  }
+
+  function handleOpenProfile() {
+    resetProfileForm();
+    resetPasswordForm();
 
     setShowProfileModal(true);
   }
 
-  // =========================================
-  // CLOSE PROFILE
-  // =========================================
-
   function handleCloseModal() {
-    if (
-      profileLoading ||
-      passwordLoading
-    ) {
-      return;
-    }
+    if (isLoading) return;
 
     setShowProfileModal(false);
 
-    setProfileName(user.name);
-    setProfileEmail(user.email);
-
-    setAvatarFile(null);
-    setAvatarPreview(user.avatar);
-
-    setCurrentPassword("");
-    setNewPassword("");
-    setConfirmPassword("");
-
-    setProfileMessage("");
-    setProfileError("");
-
-    setPasswordMessage("");
-    setPasswordError("");
-
-    setShowCurrentPassword(false);
-    setShowNewPassword(false);
-    setShowConfirmPassword(false);
+    resetProfileForm();
+    resetPasswordForm();
   }
 
-  // =========================================
+  // ==============================
   // AVATAR
-  // =========================================
+  // ==============================
 
   function handleAvatarChange(
     event: ChangeEvent<HTMLInputElement>,
   ) {
-    const file =
-      event.target.files?.[0];
+    const file = event.target.files?.[0];
 
-    if (!file) {
-      return;
-    }
-
-    // CHECK FILE TYPE
+    if (!file) return;
 
     if (!file.type.startsWith("image/")) {
       setProfileError(
         "File harus berupa gambar.",
       );
 
+      event.target.value = "";
       return;
     }
-
-    // CHECK FILE SIZE
 
     if (file.size > 2 * 1024 * 1024) {
       setProfileError(
         "Ukuran foto maksimal 2 MB.",
       );
 
+      event.target.value = "";
       return;
     }
 
-    setProfileError("");
+    if (avatarPreview?.startsWith("blob:")) {
+      URL.revokeObjectURL(avatarPreview);
+    }
 
-    setAvatarFile(file);
-
-    // Preview
     const previewUrl =
       URL.createObjectURL(file);
 
+    setProfileError("");
+    setAvatarFile(file);
     setAvatarPreview(previewUrl);
   }
 
-  // =========================================
+  // ==============================
   // UPDATE PROFILE
-  // =========================================
+  // ==============================
 
   async function handleUpdateProfile() {
     setProfileMessage("");
     setProfileError("");
 
-    // VALIDASI NAMA
+    const name = profileName.trim();
+    const email = profileEmail
+      .trim()
+      .toLowerCase();
 
-    if (!profileName.trim()) {
+    if (!name) {
       setProfileError(
         "Nama wajib diisi.",
       );
-
       return;
     }
 
-    if (profileName.trim().length < 4) {
+    if (name.length < 4) {
       setProfileError(
         "Nama minimal 4 karakter.",
       );
-
       return;
     }
 
-    // VALIDASI EMAIL
-
-    if (!profileEmail.trim()) {
+    if (!email) {
       setProfileError(
         "Email wajib diisi.",
       );
-
       return;
     }
 
@@ -291,17 +240,8 @@ export default function DashboardNavbar({
     try {
       const formData = new FormData();
 
-      formData.append(
-        "name",
-        profileName.trim(),
-      );
-
-      formData.append(
-        "email",
-        profileEmail
-          .trim()
-          .toLowerCase(),
-      );
+      formData.append("name", name);
+      formData.append("email", email);
 
       if (avatarFile) {
         formData.append(
@@ -318,15 +258,13 @@ export default function DashboardNavbar({
         },
       );
 
-      const data =
-        await response.json();
+      const data = await response.json();
 
       if (!response.ok) {
         setProfileError(
           data.message ??
             "Gagal memperbarui profile.",
         );
-
         return;
       }
 
@@ -336,10 +274,8 @@ export default function DashboardNavbar({
 
       setAvatarFile(null);
 
-      // Refresh server component
       router.refresh();
 
-      // Tutup modal
       setTimeout(() => {
         setShowProfileModal(false);
       }, 1000);
@@ -357,54 +293,39 @@ export default function DashboardNavbar({
     }
   }
 
-  // =========================================
+  // ==============================
   // CHANGE PASSWORD
-  // =========================================
+  // ==============================
 
   async function handleChangePassword() {
     setPasswordMessage("");
     setPasswordError("");
 
-    // PASSWORD LAMA
-
     if (!currentPassword) {
       setPasswordError(
         "Password lama wajib diisi.",
       );
-
       return;
     }
-
-    // PASSWORD BARU
 
     if (!newPassword) {
       setPasswordError(
         "Password baru wajib diisi.",
       );
-
       return;
     }
-
-    // CONFIRM PASSWORD
 
     if (!confirmPassword) {
       setPasswordError(
         "Konfirmasi password wajib diisi.",
       );
-
       return;
     }
 
-    // PASSWORD MATCH
-
-    if (
-      newPassword !==
-      confirmPassword
-    ) {
+    if (newPassword !== confirmPassword) {
       setPasswordError(
         "Password baru dan konfirmasi password tidak sama.",
       );
-
       return;
     }
 
@@ -416,8 +337,7 @@ export default function DashboardNavbar({
         {
           method: "POST",
           headers: {
-            "Content-Type":
-              "application/json",
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({
             currentPassword,
@@ -427,15 +347,13 @@ export default function DashboardNavbar({
         },
       );
 
-      const data =
-        await response.json();
+      const data = await response.json();
 
       if (!response.ok) {
         setPasswordError(
           data.message ??
             "Gagal mengubah password.",
         );
-
         return;
       }
 
@@ -443,16 +361,13 @@ export default function DashboardNavbar({
         "Password berhasil diubah.",
       );
 
-      // Reset form
-
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
 
-      // Tutup modal
-
       setTimeout(() => {
-        handleCloseModal();
+        setShowProfileModal(false);
+        resetPasswordForm();
       }, 1200);
     } catch (error) {
       console.error(
@@ -468,56 +383,41 @@ export default function DashboardNavbar({
     }
   }
 
-  // =========================================
-  // ROLE LABEL
-  // =========================================
+  // ==============================
+  // ROLE
+  // ==============================
 
-  function getRoleLabel(
-    role: string,
-  ) {
-    if (role === "SUPER_ADMIN") {
-      return "Super Admin";
+  function getRoleLabel(role: string) {
+    switch (role) {
+      case "SUPER_ADMIN":
+        return "Super Admin";
+
+      case "ADMIN":
+        return "Admin";
+
+      default:
+        return "User";
     }
-
-    if (role === "ADMIN") {
-      return "Admin";
-    }
-
-    return "User";
   }
 
-  // =========================================
-  // AVATAR
-  // =========================================
-
   const avatarSource =
-    avatarPreview ??
-    "/default-avatar.svg";
+    avatarPreview ?? "/default-avatar.svg";
 
-  // =========================================
+  // ==============================
   // RENDER
-  // =========================================
+  // ==============================
 
   return (
     <>
-      {/* =========================================
-          NAVBAR
-      ========================================= */}
-
       <header className="border-b bg-white">
         <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between px-6">
 
-          {/* =========================================
-              USER PROFILE
-          ========================================= */}
-
+          {/* Profile */}
           <button
             type="button"
             onClick={handleOpenProfile}
             className="flex items-center gap-3 rounded-lg px-2 py-1 text-left transition hover:bg-slate-50"
           >
-            {/* AVATAR */}
-
             <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full border border-slate-200">
               <Image
                 src={avatarSource}
@@ -527,8 +427,6 @@ export default function DashboardNavbar({
                 className="object-cover"
               />
             </div>
-
-            {/* NAME / EMAIL / ROLE */}
 
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-slate-900">
@@ -545,32 +443,20 @@ export default function DashboardNavbar({
                 </span>
 
                 <span className="shrink-0">
-                  {getRoleLabel(
-                    user.role,
-                  )}
+                  {getRoleLabel(user.role)}
                 </span>
               </div>
             </div>
           </button>
 
-          {/* =========================================
-              ONLINE USERS
-          ========================================= */}
-
+          {/* Online Users */}
           <OnlineUsers
             currentUserId={user.id}
           />
 
-          {/* =========================================
-              RIGHT MENU
-          ========================================= */}
-
+          {/* Right Menu */}
           <div className="flex items-center gap-2">
-
-            {/* SUPER ADMIN */}
-
-            {user.role ===
-              "SUPER_ADMIN" && (
+            {user.role === "SUPER_ADMIN" && (
               <button
                 type="button"
                 onClick={() =>
@@ -583,8 +469,6 @@ export default function DashboardNavbar({
                 User Management
               </button>
             )}
-
-            {/* LOGOUT */}
 
             <button
               type="button"
@@ -600,10 +484,7 @@ export default function DashboardNavbar({
         </div>
       </header>
 
-      {/* =========================================
-          PROFILE MODAL
-      ========================================= */}
-
+      {/* Profile Modal */}
       {showProfileModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-8"
@@ -618,10 +499,7 @@ export default function DashboardNavbar({
         >
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
 
-            {/* =========================================
-                HEADER
-            ========================================= */}
-
+            {/* Header */}
             <div className="mb-6 flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">
@@ -635,30 +513,20 @@ export default function DashboardNavbar({
 
               <button
                 type="button"
-                onClick={
-                  handleCloseModal
-                }
-                disabled={
-                  profileLoading ||
-                  passwordLoading
-                }
+                onClick={handleCloseModal}
+                disabled={isLoading}
                 className="rounded-lg px-2 py-1 text-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Tutup"
               >
                 ×
               </button>
             </div>
 
-            {/* =========================================
-                AVATAR
-            ========================================= */}
-
+            {/* Avatar */}
             <div className="mb-6 flex flex-col items-center">
               <div className="relative h-24 w-24 overflow-hidden rounded-full border border-slate-200">
                 <Image
-                  src={
-                    avatarPreview ??
-                    "/default-avatar.svg"
-                  }
+                  src={avatarSource}
                   alt="Preview avatar"
                   fill
                   sizes="96px"
@@ -674,27 +542,21 @@ export default function DashboardNavbar({
                 <input
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
-                  onChange={
-                    handleAvatarChange
-                  }
+                  onChange={handleAvatarChange}
+                  disabled={isLoading}
                   className="hidden"
                 />
               </label>
 
               <p className="mt-2 text-xs text-slate-400">
-                JPG, PNG, WEBP. Maksimal
-                2 MB.
+                JPG, PNG, WEBP. Maksimal 2 MB.
               </p>
             </div>
 
-            {/* =========================================
-                PROFILE INFORMATION
-            ========================================= */}
-
+            {/* Profile Information */}
             <div className="space-y-4">
 
-              {/* NAME */}
-
+              {/* Name */}
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">
                   Nama
@@ -708,17 +570,13 @@ export default function DashboardNavbar({
                       event.target.value,
                     )
                   }
-                  disabled={
-                    profileLoading ||
-                    passwordLoading
-                  }
+                  disabled={isLoading}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-black disabled:bg-slate-50"
                   placeholder="Nama lengkap"
                 />
               </div>
 
-              {/* EMAIL */}
-
+              {/* Email */}
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">
                   Email
@@ -732,17 +590,13 @@ export default function DashboardNavbar({
                       event.target.value,
                     )
                   }
-                  disabled={
-                    profileLoading ||
-                    passwordLoading
-                  }
+                  disabled={isLoading}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-black disabled:bg-slate-50"
                   placeholder="email@example.com"
                 />
               </div>
 
-              {/* ROLE */}
-
+              {/* Role */}
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">
                   Role
@@ -750,44 +604,32 @@ export default function DashboardNavbar({
 
                 <input
                   type="text"
-                  value={getRoleLabel(
-                    user.role,
-                  )}
+                  value={getRoleLabel(user.role)}
                   disabled
                   className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500"
                 />
               </div>
             </div>
 
-            {/* =========================================
-                PROFILE MESSAGE
-            ========================================= */}
-
+            {/* Profile Error */}
             {profileError && (
               <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-600">
                 {profileError}
               </div>
             )}
 
+            {/* Profile Success */}
             {profileMessage && (
               <div className="mt-4 rounded-lg bg-green-50 p-3 text-sm text-green-600">
                 {profileMessage}
               </div>
             )}
 
-            {/* =========================================
-                SAVE PROFILE
-            ========================================= */}
-
+            {/* Save Profile */}
             <button
               type="button"
-              onClick={
-                handleUpdateProfile
-              }
-              disabled={
-                profileLoading ||
-                passwordLoading
-              }
+              onClick={handleUpdateProfile}
+              disabled={isLoading}
               className="mt-4 w-full rounded-lg bg-black px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {profileLoading
@@ -795,14 +637,9 @@ export default function DashboardNavbar({
                 : "Simpan Profile"}
             </button>
 
-            {/* DIVIDER */}
-
             <div className="my-6 border-t" />
 
-            {/* =========================================
-                CHANGE PASSWORD
-            ========================================= */}
-
+            {/* Change Password */}
             <div>
               <h3 className="mb-1 text-sm font-semibold text-slate-900">
                 Ganti Password
@@ -815,8 +652,7 @@ export default function DashboardNavbar({
 
               <div className="space-y-3">
 
-                {/* CURRENT PASSWORD */}
-
+                {/* Current Password */}
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
                     Password Lama
@@ -829,19 +665,13 @@ export default function DashboardNavbar({
                           ? "text"
                           : "password"
                       }
-                      value={
-                        currentPassword
-                      }
+                      value={currentPassword}
                       onChange={(event) =>
                         setCurrentPassword(
-                          event.target
-                            .value,
+                          event.target.value,
                         )
                       }
-                      disabled={
-                        profileLoading ||
-                        passwordLoading
-                      }
+                      disabled={isLoading}
                       placeholder="Masukkan password lama"
                       autoComplete="current-password"
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 pr-20 text-sm outline-none transition focus:border-black disabled:bg-slate-50"
@@ -851,14 +681,10 @@ export default function DashboardNavbar({
                       type="button"
                       onClick={() =>
                         setShowCurrentPassword(
-                          (value) =>
-                            !value,
+                          (value) => !value,
                         )
                       }
-                      disabled={
-                        profileLoading ||
-                        passwordLoading
-                      }
+                      disabled={isLoading}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-500 hover:text-black disabled:opacity-50"
                     >
                       {showCurrentPassword
@@ -868,8 +694,7 @@ export default function DashboardNavbar({
                   </div>
                 </div>
 
-                {/* NEW PASSWORD */}
-
+                {/* New Password */}
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
                     Password Baru
@@ -885,14 +710,10 @@ export default function DashboardNavbar({
                       value={newPassword}
                       onChange={(event) =>
                         setNewPassword(
-                          event.target
-                            .value,
+                          event.target.value,
                         )
                       }
-                      disabled={
-                        profileLoading ||
-                        passwordLoading
-                      }
+                      disabled={isLoading}
                       placeholder="Minimal 8 karakter"
                       autoComplete="new-password"
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 pr-20 text-sm outline-none transition focus:border-black disabled:bg-slate-50"
@@ -902,14 +723,10 @@ export default function DashboardNavbar({
                       type="button"
                       onClick={() =>
                         setShowNewPassword(
-                          (value) =>
-                            !value,
+                          (value) => !value,
                         )
                       }
-                      disabled={
-                        profileLoading ||
-                        passwordLoading
-                      }
+                      disabled={isLoading}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-500 hover:text-black disabled:opacity-50"
                     >
                       {showNewPassword
@@ -919,8 +736,7 @@ export default function DashboardNavbar({
                   </div>
                 </div>
 
-                {/* CONFIRM PASSWORD */}
-
+                {/* Confirm Password */}
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
                     Konfirmasi Password
@@ -933,19 +749,13 @@ export default function DashboardNavbar({
                           ? "text"
                           : "password"
                       }
-                      value={
-                        confirmPassword
-                      }
+                      value={confirmPassword}
                       onChange={(event) =>
                         setConfirmPassword(
-                          event.target
-                            .value,
+                          event.target.value,
                         )
                       }
-                      disabled={
-                        profileLoading ||
-                        passwordLoading
-                      }
+                      disabled={isLoading}
                       placeholder="Ulangi password baru"
                       autoComplete="new-password"
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 pr-20 text-sm outline-none transition focus:border-black disabled:bg-slate-50"
@@ -955,14 +765,10 @@ export default function DashboardNavbar({
                       type="button"
                       onClick={() =>
                         setShowConfirmPassword(
-                          (value) =>
-                            !value,
+                          (value) => !value,
                         )
                       }
-                      disabled={
-                        profileLoading ||
-                        passwordLoading
-                      }
+                      disabled={isLoading}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-500 hover:text-black disabled:opacity-50"
                     >
                       {showConfirmPassword
@@ -973,33 +779,25 @@ export default function DashboardNavbar({
                 </div>
               </div>
 
-              {/* PASSWORD ERROR */}
-
+              {/* Password Error */}
               {passwordError && (
                 <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-600">
                   {passwordError}
                 </div>
               )}
 
-              {/* PASSWORD SUCCESS */}
-
+              {/* Password Success */}
               {passwordMessage && (
                 <div className="mt-4 rounded-lg bg-green-50 p-3 text-sm text-green-600">
                   {passwordMessage}
                 </div>
               )}
 
-              {/* SAVE PASSWORD */}
-
+              {/* Save Password */}
               <button
                 type="button"
-                onClick={
-                  handleChangePassword
-                }
-                disabled={
-                  passwordLoading ||
-                  profileLoading
-                }
+                onClick={handleChangePassword}
+                disabled={isLoading}
                 className="mt-4 w-full rounded-lg bg-black px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {passwordLoading

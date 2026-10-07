@@ -4,105 +4,111 @@ import bcrypt from "bcryptjs";
 
 import { prisma } from "@/src/lib/prisma";
 import { createSession } from "@/src/lib/session";
+import { requireSameOrigin } from "@/src/lib/security";
 
 const loginSchema = z.object({
   email: z
     .string()
     .trim()
-    .min(1, {
-      message: "Email wajib diisi.",
-    })
+    .min(1, "Email wajib diisi.")
     .toLowerCase()
-    .email({
-      message: "Format email tidak valid.",
-    }),
+    .email("Format email tidak valid."),
 
   password: z
     .string()
-    .min(1, {
-      message: "Password wajib diisi.",
-    }),
+    .min(1, "Password wajib diisi.")
+    .max(72, "Password terlalu panjang."),
 });
 
 export async function POST(request: Request) {
   try {
-    // 1. Ambil data dari request body
+    const originError = requireSameOrigin(request);
+
+    if (originError) {
+      return originError;
+    }
+
     const body = await request.json();
 
-    // 2. Validasi data menggunakan Zod
     const result = loginSchema.safeParse(body);
 
     if (!result.success) {
       return NextResponse.json(
         {
           message: "Data login tidak valid.",
-          errors: result.error.flatten().fieldErrors,
+          errors:
+            result.error.flatten().fieldErrors,
         },
         {
           status: 400,
-        }
+          headers: {
+            "Cache-Control": "no-store",
+          },
+        },
       );
     }
 
-    // 3. Ambil data yang sudah divalidasi
-    const { email, password } = result.data;
+    const {
+      email,
+      password,
+    } = result.data;
 
-    // 4. Cari user berdasarkan email
     const user = await prisma.user.findUnique({
       where: {
         email,
       },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        passwordHash: true,
+        role: true,
+        isActive: true,
+      },
     });
 
-    // 5. Jika user tidak ditemukan
+    /*
+     * Jangan membedakan user tidak ditemukan
+     * dengan password salah.
+     */
     if (!user) {
       return NextResponse.json(
         {
-          message: "Email atau password salah.",
+          message:
+            "Email atau password salah.",
         },
-        {
-          status: 401,
-        }
+        { status: 401 },
       );
     }
 
-    // 6. Cek apakah akun masih aktif
     if (!user.isActive) {
       return NextResponse.json(
         {
-          message: "Akun tidak aktif. Silakan hubungi administrator.",
+          message:
+            "Email atau password salah.",
         },
-        {
-          status: 403,
-        }
+        { status: 401 },
       );
     }
 
-    // 7. Bandingkan password dengan passwordHash
-    const passwordMatch = await bcrypt.compare(
-      password,
-      user.passwordHash
-    );
+    const passwordMatch =
+      await bcrypt.compare(
+        password,
+        user.passwordHash,
+      );
 
-    // 8. Jika password salah
     if (!passwordMatch) {
       return NextResponse.json(
         {
-          message: "Email atau password salah.",
+          message:
+            "Email atau password salah.",
         },
-        {
-          status: 401,
-        }
+        { status: 401 },
       );
     }
 
-    // 9. Buat session
-    await createSession({
-      userId: user.id,
-      role: user.role,
-    });
+    await createSession(user.id);
 
-    // 10. Kirim response berhasil
     return NextResponse.json(
       {
         message: "Login berhasil.",
@@ -115,19 +121,20 @@ export async function POST(request: Request) {
       },
       {
         status: 200,
-      }
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
     );
   } catch (error) {
     console.error("LOGIN_ERROR:", error);
 
     return NextResponse.json(
       {
-        message: "Terjadi kesalahan pada server.",
+        message:
+          "Terjadi kesalahan pada server.",
       },
-      {
-        status: 500,
-      }
+      { status: 500 },
     );
   }
 }
-
