@@ -3,7 +3,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 
 import { prisma } from "@/src/lib/prisma";
-import { getSession } from "@/src/lib/session";
+import { createSession, getSession } from "@/src/lib/session";
 import { requireSameOrigin } from "@/src/lib/security";
 
 const changePasswordSchema = z
@@ -171,6 +171,13 @@ export async function POST(request: Request) {
         },
         data: {
           passwordHash,
+          /*
+           * Naikkan tokenVersion -> semua JWT yang sudah terbit
+           * (di semua device) langsung tidak valid lagi.
+           */
+          tokenVersion: {
+            increment: 1,
+          },
         },
       }),
 
@@ -182,13 +189,11 @@ export async function POST(request: Request) {
     ]);
 
     /*
-     * Untuk arsitektur JWT saat ini:
-     * session yang sedang aktif masih dapat hidup
-     * sampai expiry.
-     *
-     * Setelah schema sessionVersion ditambahkan,
-     * bagian ini akan dibuat invalidate semua session.
+     * Terbitkan ulang sesi untuk device yang sedang dipakai,
+     * supaya user tidak ikut ter-logout di browser ini juga.
+     * Device/browser lain otomatis logout saat request berikutnya.
      */
+    await createSession(user.id);
 
     return NextResponse.json(
       {

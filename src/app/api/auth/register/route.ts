@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 
 import { prisma } from "@/src/lib/prisma";
 import { requireSameOrigin } from "@/src/lib/security";
+import { getClientIp, rateLimit } from "@/src/lib/rate-limit";
 
 const registerSchema = z.object({
   name: z
@@ -41,12 +42,33 @@ const registerSchema = z.object({
     ),
 });
 
+const REGISTER_RATE_LIMIT = 5;
+const REGISTER_RATE_WINDOW_MS = 60 * 60 * 1000; // 1 jam
+
 export async function POST(request: Request) {
   try {
     const originError = requireSameOrigin(request);
 
     if (originError) {
       return originError;
+    }
+
+    const ip = getClientIp(request);
+
+    const limit = rateLimit(
+      `register:${ip}`,
+      REGISTER_RATE_LIMIT,
+      REGISTER_RATE_WINDOW_MS,
+    );
+
+    if (!limit.success) {
+      return NextResponse.json(
+        {
+          message:
+            "Terlalu banyak percobaan registrasi. Silakan coba lagi nanti.",
+        },
+        { status: 429 },
+      );
     }
 
     const body = await request.json();

@@ -12,6 +12,7 @@ import {
 import {
   requireSameOrigin,
 } from "@/src/lib/security";
+import { getClientIp, rateLimit } from "@/src/lib/rate-limit";
 
 const forgotPasswordSchema =
   z.object({
@@ -28,6 +29,9 @@ const forgotPasswordSchema =
 const GENERIC_MESSAGE =
   "Jika email terdaftar, link reset password akan dikirim.";
 
+const FORGOT_PASSWORD_RATE_LIMIT = 3;
+const FORGOT_PASSWORD_RATE_WINDOW_MS = 15 * 60 * 1000; // 15 menit
+
 export async function POST(request: Request) {
   try {
     const originError =
@@ -36,6 +40,8 @@ export async function POST(request: Request) {
     if (originError) {
       return originError;
     }
+
+    const ip = getClientIp(request);
 
     const body =
       await request.json();
@@ -56,6 +62,33 @@ export async function POST(request: Request) {
     }
 
     const { email } = result.data;
+
+    /*
+     * Rate limit per IP+email (cegah spam reset ke satu akun) dan
+     * per IP saja dengan limit lebih longgar (cegah spam ke banyak akun).
+     */
+    const limitByIpAndEmail = rateLimit(
+      `forgot-password:${ip}:${email}`,
+      FORGOT_PASSWORD_RATE_LIMIT,
+      FORGOT_PASSWORD_RATE_WINDOW_MS,
+    );
+
+    const limitByIp = rateLimit(
+      `forgot-password:${ip}`,
+      FORGOT_PASSWORD_RATE_LIMIT * 5,
+      FORGOT_PASSWORD_RATE_WINDOW_MS,
+    );
+
+    if (!limitByIpAndEmail.success || !limitByIp.success) {
+      // Tetap balas dengan pesan generik, jangan bocorkan bahwa ini rate limit per-email.
+      return NextResponse.json(
+        { message: GENERIC_MESSAGE },
+        {
+          status: 200,
+          headers: { "Cache-Control": "no-store" },
+        },
+      );
+    }
 
     const user =
       await prisma.user.findUnique({

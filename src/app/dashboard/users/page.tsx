@@ -255,7 +255,7 @@ export default function UserManagementPage() {
     return () => {
       window.clearInterval(interval);
     };
-  }, []);
+  });
 
   // =========================================
   // OPEN EDIT MODAL

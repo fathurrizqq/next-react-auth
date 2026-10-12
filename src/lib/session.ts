@@ -2,10 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 
 import { prisma } from "@/src/lib/prisma";
-import {
-  isUserRole,
-  type UserRole,
-} from "@/src/lib/roles";
+import { isUserRole, type UserRole } from "@/src/lib/roles";
 
 const secret = process.env.AUTH_SECRET;
 
@@ -14,14 +11,12 @@ if (!secret) {
 }
 
 if (secret.length < 32) {
-  throw new Error(
-    "AUTH_SECRET harus memiliki minimal 32 karakter.",
-  );
+  throw new Error("AUTH_SECRET harus memiliki minimal 32 karakter.");
 }
 
 const encodedKey = new TextEncoder().encode(secret);
 
-const SESSION_MAX_AGE = 60 * 60 * 24;
+const SESSION_MAX_AGE = 60 * 60 * 24; // dalam detik, dipakai juga untuk expiry JWT
 
 const JWT_ISSUER = "contractor-management";
 const JWT_AUDIENCE = "contractor-management";
@@ -45,6 +40,7 @@ export async function createSession(userId: string) {
       id: true,
       role: true,
       isActive: true,
+      tokenVersion: true,
     },
   });
 
@@ -60,6 +56,7 @@ export async function createSession(userId: string) {
 
   const token = await new SignJWT({
     userId: user.id,
+    tokenVersion: user.tokenVersion,
   })
     .setProtectedHeader({
       alg: "HS256",
@@ -68,7 +65,7 @@ export async function createSession(userId: string) {
     .setIssuedAt()
     .setIssuer(JWT_ISSUER)
     .setAudience(JWT_AUDIENCE)
-    .setExpirationTime("1d")
+    .setExpirationTime(`${SESSION_MAX_AGE}s`)
     .sign(encodedKey);
 
   const cookieStore = await cookies();
@@ -92,17 +89,17 @@ export async function getSession(): Promise<SessionPayload | null> {
   }
 
   try {
-    const { payload } = await jwtVerify(
-      token,
-      encodedKey,
-      {
-        algorithms: ["HS256"],
-        issuer: JWT_ISSUER,
-        audience: JWT_AUDIENCE,
-      },
-    );
+    const { payload } = await jwtVerify(token, encodedKey, {
+      algorithms: ["HS256"],
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+    });
 
     if (typeof payload.userId !== "string") {
+      return null;
+    }
+
+    if (typeof payload.tokenVersion !== "number") {
       return null;
     }
 
@@ -114,10 +111,19 @@ export async function getSession(): Promise<SessionPayload | null> {
         id: true,
         role: true,
         isActive: true,
+        tokenVersion: true,
       },
     });
 
     if (!user || !user.isActive) {
+      return null;
+    }
+
+    /*
+     * Token diterbitkan dengan versi lama (sebelum password diganti/
+     * direset, atau sebelum "logout semua device" dipicu) -> tolak.
+     */
+    if (user.tokenVersion !== payload.tokenVersion) {
       return null;
     }
 

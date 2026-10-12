@@ -28,6 +28,12 @@ model User {
   isActive     Boolean  @default(true)
   lastSeen DateTime?
 
+  // Dinaikkan setiap kali semua sesi aktif harus di-invalidate
+  // (ganti password, reset password, atau "logout semua device").
+  // JWT yang diterbitkan sebelum kenaikan ini otomatis dianggap tidak valid
+  // oleh getSession() di src/lib/session.ts.
+  tokenVersion Int      @default(0)
+
   passwordResetTokens PasswordResetToken[]
 
   createdAt    DateTime @default(now())

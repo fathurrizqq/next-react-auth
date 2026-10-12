@@ -9,6 +9,7 @@ import { prisma } from "@/src/lib/prisma";
 import {
   requireSameOrigin,
 } from "@/src/lib/security";
+import { getClientIp, rateLimit } from "@/src/lib/rate-limit";
 
 const resetPasswordSchema =
   z
@@ -66,6 +67,9 @@ const resetPasswordSchema =
       },
     );
 
+const RESET_PASSWORD_RATE_LIMIT = 10;
+const RESET_PASSWORD_RATE_WINDOW_MS = 15 * 60 * 1000; // 15 menit
+
 export async function POST(request: Request) {
   try {
     const originError =
@@ -73,6 +77,24 @@ export async function POST(request: Request) {
 
     if (originError) {
       return originError;
+    }
+
+    const ip = getClientIp(request);
+
+    const limit = rateLimit(
+      `reset-password:${ip}`,
+      RESET_PASSWORD_RATE_LIMIT,
+      RESET_PASSWORD_RATE_WINDOW_MS,
+    );
+
+    if (!limit.success) {
+      return NextResponse.json(
+        {
+          message:
+            "Terlalu banyak percobaan. Silakan coba lagi beberapa saat lagi.",
+        },
+        { status: 429 },
+      );
     }
 
     const body =
@@ -181,6 +203,13 @@ export async function POST(request: Request) {
         },
         data: {
           passwordHash,
+          /*
+           * Naikkan tokenVersion -> semua JWT yang sudah terbit
+           * (di semua device) langsung tidak valid lagi.
+           */
+          tokenVersion: {
+            increment: 1,
+          },
         },
       }),
 
