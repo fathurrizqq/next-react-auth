@@ -18,6 +18,13 @@ enum UserRole {
   USER
 }
 
+enum OtpPurpose {
+  REGISTER
+  RESET_PASSWORD
+  CHANGE_PASSWORD
+  CHANGE_EMAIL
+}
+
 model User {
   id           String   @id @default(uuid())
   name         String
@@ -26,31 +33,60 @@ model User {
   role         UserRole @default(USER)
   avatar       String?
   isActive     Boolean  @default(true)
-  lastSeen DateTime?
+  lastSeen     DateTime?
 
-  // Dinaikkan setiap kali semua sesi aktif harus di-invalidate
-  // (ganti password, reset password, atau "logout semua device").
-  // JWT yang diterbitkan sebelum kenaikan ini otomatis dianggap tidak valid
-  // oleh getSession() di src/lib/session.ts.
-  tokenVersion Int      @default(0)
+  // Untuk batas ganti password / email seminggu sekali.
+  passwordChangedAt DateTime?
+  emailChangedAt    DateTime?
 
-  passwordResetTokens PasswordResetToken[]
+  sessions     Session[]
+  otpCodes     OtpCode[]
+  activityLogs ActivityLog[]
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
-model PasswordResetToken {
+model Session {
   id        String   @id @default(uuid())
   tokenHash String   @unique
-
   userId    String
-
-  user      User     @relation(fields:[userId], references: [id], onDelete: Cascade) 
-
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userAgent String?
   expiresAt DateTime
   createdAt DateTime @default(now())
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model OtpCode {
+  id        String     @id @default(uuid())
+  purpose   OtpPurpose
+  email     String
+  codeHash  String
+  payload   Json?
+  attempts  Int        @default(0)
+  userId    String?
+  user      User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime   @default(now())
+
+  @@index([email, purpose])
+  @@index([expiresAt])
+}
+
+model ActivityLog {
+  id         String   @id @default(uuid())
+  action     String
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorEmail String?
+  targetId   String?
+  detail     String?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
 }

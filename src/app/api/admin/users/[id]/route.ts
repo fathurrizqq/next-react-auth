@@ -1,407 +1,253 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { prisma } from "@/src/lib/prisma";
 import { getSession } from "@/src/lib/session";
+import { notifyUser } from "@/src/lib/mail";
 import {
+  jsonResponse,
+  readJson,
   requireSameOrigin,
+  unauthorized,
 } from "@/src/lib/security";
+import { logActivity } from "@/src/lib/audit";
+import { isUniqueConstraintError } from "@/src/lib/errors";
+import { emailSchema, nameSchema } from "@/src/lib/validation";
 
 const updateUserSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(
-      4,
-      "Nama minimal 4 karakter.",
-    )
-    .max(
-      100,
-      "Nama maksimal 100 karakter.",
-    ),
-
-  email: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .email("Email tidak valid.")
-    .max(254),
-
-  role: z.enum([
-    "USER",
-    "ADMIN",
-    "SUPER_ADMIN",
-  ]),
-
+  name: nameSchema,
+  email: emailSchema,
+  role: z.enum(["USER", "ADMIN", "SUPER_ADMIN"]),
   isActive: z.boolean(),
 });
 
 type RouteContext = {
-  params: Promise<{
-    id: string;
-  }>;
+  params: Promise<{ id: string }>;
 };
 
-export async function PATCH(
-  request: Request,
-  context: RouteContext,
-) {
+async function requireSuperAdmin() {
+  const session = await getSession();
+
+  if (!session) {
+    return { error: unauthorized() };
+  }
+
+  if (session.role !== "SUPER_ADMIN") {
+    return {
+      error: jsonResponse({ message: "Anda tidak memiliki akses." }, 403),
+    };
+  }
+
+  return { session };
+}
+
+async function countActiveSuperAdmins() {
+  return prisma.user.count({
+    where: { role: "SUPER_ADMIN", isActive: true },
+  });
+}
+
+export async function PATCH(request: Request, context: RouteContext) {
   try {
-    const originError =
-      requireSameOrigin(request);
+    const originError = requireSameOrigin(request);
 
     if (originError) {
       return originError;
     }
 
-    const session =
-      await getSession();
+    const auth = await requireSuperAdmin();
 
-    if (!session) {
-      return NextResponse.json(
-        {
-          message:
-            "Anda harus login terlebih dahulu.",
-        },
-        { status: 401 },
-      );
+    if ("error" in auth) {
+      return auth.error;
     }
 
-    if (
-      session.role !==
-      "SUPER_ADMIN"
-    ) {
-      return NextResponse.json(
-        {
-          message:
-            "Anda tidak memiliki akses.",
-        },
-        { status: 403 },
-      );
-    }
+    const { session } = auth;
+    const { id } = await context.params;
 
-    const { id } =
-      await context.params;
-
-    const body =
-      await request.json();
-
-    const result =
-      updateUserSchema.safeParse(
-        body,
-      );
+    const result = updateUserSchema.safeParse(await readJson(request));
 
     if (!result.success) {
-      return NextResponse.json(
+      return jsonResponse(
         {
-          message:
-            "Data user tidak valid.",
-          errors:
-            result.error.flatten()
-              .fieldErrors,
+          message: "Data user tidak valid.",
+          errors: result.error.flatten().fieldErrors,
         },
-        { status: 400 },
+        400,
       );
     }
 
-    const {
-      name,
-      email,
-      role,
-      isActive,
-    } = result.data;
+    const { name, email, role, isActive } = result.data;
 
-    const user =
-      await prisma.user.findUnique({
-        where: {
-          id,
-        },
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        isActive: true,
+      },
+    });
+
+    if (!user) {
+      return jsonResponse({ message: "User tidak ditemukan." }, 404);
+    }
+
+    // Tidak boleh menurunkan role atau menonaktifkan akun sendiri.
+    if (user.id === session.userId && role !== "SUPER_ADMIN") {
+      return jsonResponse(
+        { message: "Anda tidak dapat menurunkan role akun sendiri." },
+        400,
+      );
+    }
+
+    if (user.id === session.userId && !isActive) {
+      return jsonResponse(
+        { message: "Anda tidak dapat menonaktifkan akun sendiri." },
+        400,
+      );
+    }
+
+    // Jangan sampai Super Admin aktif terakhir hilang.
+    const removesSuperAdmin =
+      user.role === "SUPER_ADMIN" &&
+      (role !== "SUPER_ADMIN" || !isActive);
+
+    if (removesSuperAdmin && (await countActiveSuperAdmins()) <= 1) {
+      return jsonResponse(
+        { message: "Minimal harus ada satu Super Admin aktif." },
+        400,
+      );
+    }
+
+    try {
+      const updatedUser = await prisma.user.update({
+        where: { id },
+        data: { name, email, role, isActive },
         select: {
           id: true,
+          name: true,
+          email: true,
           role: true,
+          avatar: true,
           isActive: true,
         },
       });
 
-    if (!user) {
-      return NextResponse.json(
-        {
-          message:
-            "User tidak ditemukan.",
-        },
-        { status: 404 },
-      );
-    }
+      const changes: string[] = [];
 
-    /*
-     * Tidak boleh menurunkan role sendiri.
-     */
-    if (
-      user.id === session.userId &&
-      role !== "SUPER_ADMIN"
-    ) {
-      return NextResponse.json(
-        {
-          message:
-            "Anda tidak dapat menurunkan role akun sendiri.",
-        },
-        { status: 400 },
-      );
-    }
+      if (user.name !== name) changes.push(`nama "${user.name}" → "${name}"`);
+      if (user.email !== email) changes.push(`email ${user.email} → ${email}`);
+      if (user.role !== role) changes.push(`role ${user.role} → ${role}`);
+      if (user.isActive !== isActive) {
+        changes.push(isActive ? "akun diaktifkan" : "akun dinonaktifkan");
+      }
 
-    /*
-     * Tidak boleh menonaktifkan diri sendiri.
-     */
-    if (
-      user.id === session.userId &&
-      !isActive
-    ) {
-      return NextResponse.json(
-        {
-          message:
-            "Anda tidak dapat menonaktifkan akun sendiri.",
-        },
-        { status: 400 },
-      );
-    }
+      await logActivity({
+        request,
+        action: "USER_UPDATED",
+        actorId: session.userId,
+        targetId: user.id,
+        detail: `${user.email}: ${changes.join(", ") || "tanpa perubahan"}`,
+      });
 
-    /*
-     * Pastikan tidak menghilangkan
-     * Super Admin terakhir.
-     */
-    const removesSuperAdmin =
-      user.role === "SUPER_ADMIN" &&
-      (role !== "SUPER_ADMIN" ||
-        !isActive);
-
-    if (removesSuperAdmin) {
-      const activeSuperAdminCount =
-        await prisma.user.count({
-          where: {
-            role: "SUPER_ADMIN",
-            isActive: true,
-          },
-        });
-
-      if (
-        activeSuperAdminCount <= 1
-      ) {
-        return NextResponse.json(
-          {
-            message:
-              "Minimal harus ada satu Super Admin aktif.",
-          },
-          { status: 400 },
+      // Beri tahu user bahwa akunnya sudah bisa dipakai.
+      if (!user.isActive && isActive) {
+        notifyUser(
+          updatedUser.email,
+          "Akun Anda Telah Diaktifkan",
+          "Akun Anda telah diaktifkan oleh Super Admin. Sekarang Anda dapat login ke aplikasi.",
+          { footer: "" },
         );
       }
-    }
 
-    try {
-      const updatedUser =
-        await prisma.user.update({
-          where: {
-            id,
-          },
-          data: {
-            name,
-            email,
-            role,
-            isActive,
-          },
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
-            avatar: true,
-            isActive: true,
-          },
-        });
-
-      return NextResponse.json(
-        {
-          message:
-            "User berhasil diperbarui.",
-          user: updatedUser,
-        },
-        {
-          status: 200,
-          headers: {
-            "Cache-Control":
-              "no-store",
-          },
-        },
-      );
-    } catch (error: unknown) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "P2002"
-      ) {
-        return NextResponse.json(
-          {
-            message:
-              "Email sudah digunakan user lain.",
-          },
-          { status: 409 },
+      return jsonResponse({
+        message: "User berhasil diperbarui.",
+        user: updatedUser,
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        return jsonResponse(
+          { message: "Email sudah digunakan user lain." },
+          409,
         );
       }
 
       throw error;
     }
   } catch (error) {
-    console.error(
-      "UPDATE_ADMIN_USER_ERROR:",
-      error,
-    );
+    console.error("UPDATE_ADMIN_USER_ERROR:", error);
 
-    return NextResponse.json(
-      {
-        message:
-          "Terjadi kesalahan saat memperbarui user.",
-      },
-      { status: 500 },
+    return jsonResponse(
+      { message: "Terjadi kesalahan saat memperbarui user." },
+      500,
     );
   }
 }
 
-export async function DELETE(
-  request: Request,
-  context: RouteContext,
-) {
+export async function DELETE(request: Request, context: RouteContext) {
   try {
-    const originError =
-      requireSameOrigin(request);
+    const originError = requireSameOrigin(request);
 
     if (originError) {
       return originError;
     }
 
-    const session =
-      await getSession();
+    const auth = await requireSuperAdmin();
 
-    if (!session) {
-      return NextResponse.json(
-        {
-          message:
-            "Anda harus login terlebih dahulu.",
-        },
-        { status: 401 },
-      );
+    if ("error" in auth) {
+      return auth.error;
     }
 
-    if (
-      session.role !==
-      "SUPER_ADMIN"
-    ) {
-      return NextResponse.json(
-        {
-          message:
-            "Anda tidak memiliki akses.",
-        },
-        { status: 403 },
-      );
-    }
-
-    const { id } =
-      await context.params;
+    const { session } = auth;
+    const { id } = await context.params;
 
     if (id === session.userId) {
-      return NextResponse.json(
-        {
-          message:
-            "Anda tidak dapat menghapus akun sendiri.",
-        },
-        { status: 400 },
+      return jsonResponse(
+        { message: "Anda tidak dapat menghapus akun sendiri." },
+        400,
       );
     }
 
-    const user =
-      await prisma.user.findUnique({
-        where: {
-          id,
-        },
-        select: {
-          id: true,
-          role: true,
-          isActive: true,
-        },
-      });
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, email: true, role: true },
+    });
 
     if (!user) {
-      return NextResponse.json(
-        {
-          message:
-            "User tidak ditemukan.",
-        },
-        { status: 404 },
-      );
+      return jsonResponse({ message: "User tidak ditemukan." }, 404);
     }
 
     if (
-      user.role === "SUPER_ADMIN"
+      user.role === "SUPER_ADMIN" &&
+      (await countActiveSuperAdmins()) <= 1
     ) {
-      const activeSuperAdminCount =
-        await prisma.user.count({
-          where: {
-            role: "SUPER_ADMIN",
-            isActive: true,
-          },
-        });
-
-      if (
-        activeSuperAdminCount <= 1
-      ) {
-        return NextResponse.json(
-          {
-            message:
-              "Super Admin terakhir tidak dapat dihapus.",
-          },
-          { status: 400 },
-        );
-      }
+      return jsonResponse(
+        { message: "Super Admin terakhir tidak dapat dihapus." },
+        400,
+      );
     }
 
-    await prisma.$transaction([
-      prisma.passwordResetToken.deleteMany({
-        where: {
-          userId: id,
-        },
-      }),
+    // Session dan OTP ikut terhapus lewat onDelete: Cascade.
+    await prisma.user.delete({ where: { id } });
 
-      prisma.user.delete({
-        where: {
-          id,
-        },
-      }),
-    ]);
+    await logActivity({
+      request,
+      action: "USER_DELETED",
+      actorId: session.userId,
+      targetId: user.id,
+      detail: `Menghapus user ${user.email}`,
+    });
 
-    return NextResponse.json(
-      {
-        message:
-          "User berhasil dihapus.",
-      },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control":
-            "no-store",
-        },
-      },
-    );
+    return jsonResponse({ message: "User berhasil dihapus." });
   } catch (error) {
-    console.error(
-      "DELETE_ADMIN_USER_ERROR:",
-      error,
-    );
+    console.error("DELETE_ADMIN_USER_ERROR:", error);
 
-    return NextResponse.json(
+    return jsonResponse(
       {
         message:
           "User tidak dapat dihapus. Pastikan user tidak masih digunakan oleh data lain.",
       },
-      { status: 500 },
+      500,
     );
   }
 }

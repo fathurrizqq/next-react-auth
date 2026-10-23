@@ -1,7 +1,6 @@
-import { NextResponse } from "next/server";
-
-import { destroySession } from "@/src/lib/session";
-import { requireSameOrigin } from "@/src/lib/security";
+import { destroySession, getSession } from "@/src/lib/session";
+import { jsonResponse, requireSameOrigin } from "@/src/lib/security";
+import { logActivity } from "@/src/lib/audit";
 
 export async function POST(request: Request) {
   try {
@@ -11,28 +10,22 @@ export async function POST(request: Request) {
       return originError;
     }
 
+    const session = await getSession();
+
     await destroySession();
 
-    return NextResponse.json(
-      {
-        message: "Logout berhasil.",
-      },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control": "no-store",
-        },
-      },
-    );
+    if (session) {
+      await logActivity({
+        request,
+        action: "LOGOUT",
+        actorId: session.userId,
+      });
+    }
+
+    return jsonResponse({ message: "Logout berhasil." });
   } catch (error) {
     console.error("LOGOUT_ERROR:", error);
 
-    return NextResponse.json(
-      {
-        message:
-          "Terjadi kesalahan saat logout.",
-      },
-      { status: 500 },
-    );
+    return jsonResponse({ message: "Terjadi kesalahan saat logout." }, 500);
   }
 }

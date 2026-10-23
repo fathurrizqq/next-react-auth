@@ -1,250 +1,115 @@
-import { NextResponse } from "next/server";
-import {
-  createHash,
-} from "crypto";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 
 import { prisma } from "@/src/lib/prisma";
+import { verifyOtp } from "@/src/lib/otp";
+import { notifyUser } from "@/src/lib/mail";
 import {
+  jsonResponse,
+  readJson,
   requireSameOrigin,
+  tooManyRequests,
 } from "@/src/lib/security";
 import { getClientIp, rateLimit } from "@/src/lib/rate-limit";
+import { logActivity } from "@/src/lib/audit";
+import {
+  PASSWORD_MISMATCH,
+  confirmPasswordSchema,
+  emailSchema,
+  otpCodeSchema,
+  passwordSchema,
+  passwordsMatch,
+} from "@/src/lib/validation";
 
-const resetPasswordSchema =
-  z
-    .object({
-      token: z
-        .string()
-        .min(
-          1,
-          "Token reset tidak valid.",
-        ),
+const schema = z
+  .object({
+    email: emailSchema,
+    code: otpCodeSchema,
+    newPassword: passwordSchema,
+    confirmPassword: confirmPasswordSchema,
+  })
+  .refine(passwordsMatch, PASSWORD_MISMATCH);
 
-      newPassword: z
-        .string()
-        .min(
-          8,
-          "Password minimal 8 karakter.",
-        )
-        .max(
-          72,
-          "Password maksimal 72 karakter.",
-        )
-        .regex(
-          /[A-Z]/,
-          "Password harus memiliki huruf kapital.",
-        )
-        .regex(
-          /[a-z]/,
-          "Password harus memiliki huruf kecil.",
-        )
-        .regex(
-          /[0-9]/,
-          "Password harus memiliki angka.",
-        )
-        .regex(
-          /[^A-Za-z0-9]/,
-          "Password harus memiliki karakter khusus.",
-        ),
-
-      confirmPassword: z
-        .string()
-        .min(
-          1,
-          "Konfirmasi password wajib diisi.",
-        )
-        .max(72),
-    })
-    .refine(
-      (data) =>
-        data.newPassword ===
-        data.confirmPassword,
-      {
-        message:
-          "Password dan konfirmasi password tidak sama.",
-        path: ["confirmPassword"],
-      },
-    );
-
-const RESET_PASSWORD_RATE_LIMIT = 10;
-const RESET_PASSWORD_RATE_WINDOW_MS = 15 * 60 * 1000; // 15 menit
+const INVALID_CODE = "Kode tidak valid atau sudah kedaluwarsa.";
+const WINDOW_MS = 15 * 60 * 1000;
 
 export async function POST(request: Request) {
   try {
-    const originError =
-      requireSameOrigin(request);
+    const originError = requireSameOrigin(request);
 
     if (originError) {
       return originError;
     }
 
-    const ip = getClientIp(request);
-
-    const limit = rateLimit(
-      `reset-password:${ip}`,
-      RESET_PASSWORD_RATE_LIMIT,
-      RESET_PASSWORD_RATE_WINDOW_MS,
-    );
-
-    if (!limit.success) {
-      return NextResponse.json(
-        {
-          message:
-            "Terlalu banyak percobaan. Silakan coba lagi beberapa saat lagi.",
-        },
-        { status: 429 },
-      );
-    }
-
-    const body =
-      await request.json();
-
-    const result =
-      resetPasswordSchema.safeParse(
-        body,
-      );
+    const result = schema.safeParse(await readJson(request));
 
     if (!result.success) {
-      return NextResponse.json(
+      return jsonResponse(
         {
-          message:
-            "Data reset password tidak valid.",
-          errors:
-            result.error.flatten()
-              .fieldErrors,
+          message: "Data reset password tidak valid.",
+          errors: result.error.flatten().fieldErrors,
         },
-        { status: 400 },
+        400,
       );
     }
 
-    const {
-      token,
-      newPassword,
-    } = result.data;
+    const { email, code, newPassword } = result.data;
+    const ip = getClientIp(request);
 
-    const tokenHash =
-      createHash("sha256")
-        .update(token)
-        .digest("hex");
+    const byEmail = rateLimit(`reset:${ip}:${email}`, 10, WINDOW_MS);
+    const byIp = rateLimit(`reset:${ip}`, 30, WINDOW_MS);
 
-    const resetToken =
-      await prisma.passwordResetToken.findUnique(
-        {
-          where: {
-            tokenHash,
-          },
-          select: {
-            id: true,
-            userId: true,
-            expiresAt: true,
-            user: {
-              select: {
-                id: true,
-                isActive: true,
-              },
-            },
-          },
-        },
-      );
-
-    if (!resetToken) {
-      return NextResponse.json(
-        {
-          message:
-            "Token reset tidak valid atau sudah digunakan.",
-        },
-        { status: 400 },
-      );
+    if (!byEmail.success || !byIp.success) {
+      return tooManyRequests();
     }
 
-    if (
-      resetToken.expiresAt <
-      new Date()
-    ) {
-      await prisma.passwordResetToken.delete({
-        where: {
-          id: resetToken.id,
-        },
-      });
+    const verified = await verifyOtp({
+      purpose: "RESET_PASSWORD",
+      email,
+      code,
+    });
 
-      return NextResponse.json(
-        {
-          message:
-            "Token reset sudah kedaluwarsa.",
-        },
-        { status: 400 },
-      );
+    if (!verified?.userId) {
+      return jsonResponse({ message: INVALID_CODE }, 400);
     }
 
-    if (
-      !resetToken.user ||
-      !resetToken.user.isActive
-    ) {
-      return NextResponse.json(
-        {
-          message:
-            "Token reset tidak dapat digunakan.",
-        },
-        { status: 400 },
-      );
+    const user = await prisma.user.findUnique({
+      where: { id: verified.userId },
+      select: { id: true, email: true, isActive: true },
+    });
+
+    if (!user || !user.isActive) {
+      return jsonResponse({ message: INVALID_CODE }, 400);
     }
 
-    const passwordHash =
-      await bcrypt.hash(
-        newPassword,
-        12,
-      );
+    const passwordHash = await bcrypt.hash(newPassword, 12);
 
     await prisma.$transaction([
       prisma.user.update({
-        where: {
-          id: resetToken.userId,
-        },
-        data: {
-          passwordHash,
-          /*
-           * Naikkan tokenVersion -> semua JWT yang sudah terbit
-           * (di semua device) langsung tidak valid lagi.
-           */
-          tokenVersion: {
-            increment: 1,
-          },
-        },
+        where: { id: user.id },
+        data: { passwordHash },
       }),
-
-      prisma.passwordResetToken.deleteMany({
-        where: {
-          userId: resetToken.userId,
-        },
-      }),
+      // Keluarkan semua perangkat.
+      prisma.session.deleteMany({ where: { userId: user.id } }),
     ]);
 
-    return NextResponse.json(
-      {
-        message:
-          "Password berhasil direset.",
-      },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control":
-            "no-store",
-        },
-      },
-    );
-  } catch (error) {
-    console.error(
-      "RESET_PASSWORD_ERROR:",
-      error,
+    await logActivity({
+      request,
+      action: "PASSWORD_RESET",
+      actorId: user.id,
+      actorEmail: user.email,
+    });
+
+    notifyUser(
+      user.email,
+      "Password Anda Telah Direset",
+      "Password akun Anda baru saja direset. Semua sesi login telah dikeluarkan.",
     );
 
-    return NextResponse.json(
-      {
-        message:
-          "Terjadi kesalahan pada server.",
-      },
-      { status: 500 },
-    );
+    return jsonResponse({ message: "Password berhasil direset." });
+  } catch (error) {
+    console.error("RESET_PASSWORD_ERROR:", error);
+
+    return jsonResponse({ message: "Terjadi kesalahan pada server." }, 500);
   }
 }

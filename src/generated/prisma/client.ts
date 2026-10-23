@@ -47,7 +47,17 @@ export { Prisma }
  */
 export type User = Prisma.UserModel
 /**
- * Model PasswordResetToken
+ * Model Session
  * 
  */
-export type PasswordResetToken = Prisma.PasswordResetTokenModel
+export type Session = Prisma.SessionModel
+/**
+ * Model OtpCode
+ * 
+ */
+export type OtpCode = Prisma.OtpCodeModel
+/**
+ * Model ActivityLog
+ * 
+ */
+export type ActivityLog = Prisma.ActivityLogModel

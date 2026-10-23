@@ -4,8 +4,14 @@ import bcrypt from "bcryptjs";
 
 import { prisma } from "@/src/lib/prisma";
 import { createSession } from "@/src/lib/session";
-import { requireSameOrigin } from "@/src/lib/security";
+import {
+  jsonResponse,
+  readJson,
+  requireSameOrigin,
+  tooManyRequests,
+} from "@/src/lib/security";
 import { getClientIp, rateLimit } from "@/src/lib/rate-limit";
+import { logActivity } from "@/src/lib/audit";
 
 const loginSchema = z.object({
   email: z
@@ -22,18 +28,23 @@ const loginSchema = z.object({
 });
 
 /*
- * Hash dummy untuk menyamakan waktu respons antara
- * "user tidak ditemukan" dan "password salah", supaya endpoint
- * ini tidak bisa dipakai untuk enumerasi email lewat timing attack.
- * Cost-nya sengaja disamakan dengan cost hash asli (12).
+ * Batas per IP sengaja longgar karena satu kantor biasanya berbagi
+ * satu IP. Batas per IP + email yang menahan brute force.
  */
-const DUMMY_HASH = bcrypt.hashSync(
-  "dummy-password-untuk-timing-safety",
-  12,
-);
+const LOGIN_PER_EMAIL = 5;
+const LOGIN_PER_IP = 100;
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
 
-const LOGIN_RATE_LIMIT = 5;
-const LOGIN_RATE_WINDOW_MS = 5 * 60 * 1000; // 5 menit
+/*
+ * Hash dummy agar waktu respons "email tidak ada" sama dengan
+ * "password salah" (mencegah enumerasi email lewat timing).
+ */
+let dummyHash: string | null = null;
+
+function getDummyHash(): string {
+  dummyHash ??= bcrypt.hashSync("dummy-password-timing-safety", 12);
+  return dummyHash;
+}
 
 export async function POST(request: Request) {
   try {
@@ -43,55 +54,36 @@ export async function POST(request: Request) {
       return originError;
     }
 
-    const ip = getClientIp(request);
-
-    const body = await request.json();
-
-    const result = loginSchema.safeParse(body);
+    const result = loginSchema.safeParse(await readJson(request));
 
     if (!result.success) {
-      return NextResponse.json(
+      return jsonResponse(
         {
           message: "Data login tidak valid.",
           errors: result.error.flatten().fieldErrors,
         },
-        {
-          status: 400,
-          headers: { "Cache-Control": "no-store" },
-        },
+        400,
       );
     }
 
     const { email, password } = result.data;
+    const ip = getClientIp(request);
 
-    /*
-     * Dua lapis rate limit:
-     * - per IP + email: mencegah brute force ke satu akun tertentu.
-     * - per IP saja (limit lebih longgar): mencegah satu IP mencoba
-     *   banyak email berbeda secara berlebihan (credential stuffing).
-     */
-    const limitByIpAndEmail = rateLimit(
+    const byEmail = rateLimit(
       `login:${ip}:${email}`,
-      LOGIN_RATE_LIMIT,
-      LOGIN_RATE_WINDOW_MS,
+      LOGIN_PER_EMAIL,
+      LOGIN_WINDOW_MS,
     );
 
-    const limitByIp = rateLimit(
+    const byIp = rateLimit(
       `login:${ip}`,
-      LOGIN_RATE_LIMIT * 4,
-      LOGIN_RATE_WINDOW_MS,
+      LOGIN_PER_IP,
+      LOGIN_WINDOW_MS,
     );
 
-    if (!limitByIpAndEmail.success || !limitByIp.success) {
-      return NextResponse.json(
-        {
-          message:
-            "Terlalu banyak percobaan login. Silakan coba lagi beberapa saat lagi.",
-        },
-        {
-          status: 429,
-          headers: { "Cache-Control": "no-store" },
-        },
+    if (!byEmail.success || !byIp.success) {
+      return tooManyRequests(
+        "Terlalu banyak percobaan login. Silakan coba lagi beberapa menit lagi.",
       );
     }
 
@@ -107,26 +99,54 @@ export async function POST(request: Request) {
       },
     });
 
-    /*
-     * Selalu panggil bcrypt.compare, baik user ditemukan maupun tidak,
-     * supaya waktu respons tidak membocorkan apakah email terdaftar.
-     */
     const passwordMatch = await bcrypt.compare(
       password,
-      user?.passwordHash ?? DUMMY_HASH,
+      user?.passwordHash ?? getDummyHash(),
     );
 
-    if (!user || !user.isActive || !passwordMatch) {
-      return NextResponse.json(
-        { message: "Email atau password salah." },
+    if (!user || !passwordMatch) {
+      if (user) {
+        await logActivity({
+          request,
+          action: "LOGIN_FAILED",
+          actorId: user.id,
+          actorEmail: user.email,
+        });
+      }
+
+      return jsonResponse({ message: "Email atau password salah." }, 401);
+    }
+
+    /*
+     * Pesan ini hanya terlihat oleh orang yang password-nya benar,
+     * jadi tidak bisa dipakai untuk menebak email yang terdaftar.
+     */
+    if (!user.isActive) {
+      await logActivity({
+        request,
+        action: "LOGIN_FAILED",
+        actorId: user.id,
+        actorEmail: user.email,
+        detail: "Akun belum aktif",
+      });
+
+      return jsonResponse(
         {
-          status: 401,
-          headers: { "Cache-Control": "no-store" },
+          message:
+            "Akun Anda belum aktif. Mohon tunggu aktivasi dari Super Admin.",
         },
+        403,
       );
     }
 
     await createSession(user.id);
+
+    await logActivity({
+      request,
+      action: "LOGIN",
+      actorId: user.id,
+      actorEmail: user.email,
+    });
 
     return NextResponse.json(
       {
@@ -146,9 +166,6 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("LOGIN_ERROR:", error);
 
-    return NextResponse.json(
-      { message: "Terjadi kesalahan pada server." },
-      { status: 500 },
-    );
+    return jsonResponse({ message: "Terjadi kesalahan pada server." }, 500);
   }
 }

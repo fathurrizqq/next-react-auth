@@ -1,36 +1,30 @@
 import nodemailer from "nodemailer";
 
-const gmailUser =
-  process.env.GMAIL_USER;
+import type { OtpPurposeName } from "@/src/lib/otp";
 
-const gmailAppPassword =
-  process.env.GMAIL_APP_PASSWORD;
+let transporter: nodemailer.Transporter | null = null;
 
-if (!gmailUser) {
-  throw new Error(
-    "GMAIL_USER belum diset.",
-  );
-}
+function getTransporter() {
+  if (transporter) {
+    return transporter;
+  }
 
-if (!gmailAppPassword) {
-  throw new Error(
-    "GMAIL_APP_PASSWORD belum diset.",
-  );
-}
+  const user = process.env.GMAIL_USER;
+  const pass = process.env.GMAIL_APP_PASSWORD;
 
-const transporter =
-  nodemailer.createTransport({
+  if (!user || !pass) {
+    throw new Error("GMAIL_USER / GMAIL_APP_PASSWORD belum diset.");
+  }
+
+  transporter = nodemailer.createTransport({
     service: "gmail",
-
-    auth: {
-      user: gmailUser,
-      pass: gmailAppPassword,
-    },
+    auth: { user, pass },
   });
 
-function escapeHtml(
-  value: string,
-): string {
+  return transporter;
+}
+
+function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -39,60 +33,112 @@ function escapeHtml(
     .replaceAll("'", "&#039;");
 }
 
-export async function sendPasswordResetEmail(
-  email: string,
-  resetUrl: string,
+async function sendMail(
+  to: string,
+  subject: string,
+  text: string,
+  bodyHtml: string,
 ) {
-  const safeUrl =
-    escapeHtml(resetUrl);
+  await getTransporter().sendMail({
+    from: `"Contractor Management" <${process.env.GMAIL_USER}>`,
+    to,
+    subject,
+    text,
+    html: `<!DOCTYPE html>
+<html lang="id">
+  <body style="font-family: Arial, sans-serif; line-height: 1.6;">
+    ${bodyHtml}
+  </body>
+</html>`,
+  });
+}
 
-  await transporter.sendMail({
-    from: `"Contractor Management" <${gmailUser}>`,
+const OTP_COPY: Record<
+  OtpPurposeName,
+  { subject: string; intro: string }
+> = {
+  REGISTER: {
+    subject: "Kode Verifikasi Registrasi",
+    intro: "Gunakan kode berikut untuk menyelesaikan registrasi akun Anda.",
+  },
+  RESET_PASSWORD: {
+    subject: "Kode Reset Password",
+    intro: "Gunakan kode berikut untuk mengatur ulang password Anda.",
+  },
+  CHANGE_PASSWORD: {
+    subject: "Kode Verifikasi Ganti Password",
+    intro: "Gunakan kode berikut untuk mengonfirmasi penggantian password.",
+  },
+  CHANGE_EMAIL: {
+    subject: "Kode Verifikasi Email Baru",
+    intro: "Gunakan kode berikut untuk memverifikasi email baru Anda.",
+  },
+};
 
-    to: email,
+const OTP_FOOTER =
+  "Kode berlaku 10 menit. Jangan bagikan kode ini kepada siapa pun. " +
+  "Jika Anda tidak merasa memintanya, abaikan email ini.";
 
-    subject:
-      "Reset Password - Contractor Management",
+export async function sendOtpEmail(
+  to: string,
+  purpose: OtpPurposeName,
+  code: string,
+) {
+  const { subject, intro } = OTP_COPY[purpose];
 
-    text:
-      `Kami menerima permintaan reset password.\n\n` +
-      `Gunakan link berikut untuk membuat password baru:\n` +
-      `${resetUrl}\n\n` +
-      `Link berlaku selama 30 menit.\n\n` +
-      `Jika kamu tidak meminta reset password, abaikan email ini.`,
+  await sendMail(
+    to,
+    `${subject} - Contractor Management`,
+    `${intro}\n\nKode: ${code}\n\n${OTP_FOOTER}`,
+    `<h2>${escapeHtml(subject)}</h2>
+    <p>${escapeHtml(intro)}</p>
+    <p style="font-size: 28px; font-weight: bold; letter-spacing: 6px;">${escapeHtml(code)}</p>
+    <p>${escapeHtml(OTP_FOOTER)}</p>`,
+  );
+}
 
-    html: `
-      <!DOCTYPE html>
-      <html lang="id">
-        <body style="font-family: Arial, sans-serif; line-height: 1.6;">
-          <h2>Reset Password</h2>
+const DEFAULT_SECURITY_FOOTER =
+  "Jika ini bukan Anda, segera hubungi administrator dan ganti password Anda.";
 
-          <p>
-            Kami menerima permintaan untuk
-            mengatur ulang password akun kamu.
-          </p>
+async function sendNotice(
+  to: string,
+  subject: string,
+  message: string,
+  footer: string,
+) {
+  await sendMail(
+    to,
+    `${subject} - Contractor Management`,
+    footer ? `${message}\n\n${footer}` : message,
+    `<h2>${escapeHtml(subject)}</h2>
+    <p>${escapeHtml(message)}</p>
+    ${footer ? `<p>${escapeHtml(footer)}</p>` : ""}`,
+  );
+}
 
-          <p>
-            Link reset password berlaku selama
-            <strong>30 menit</strong>.
-          </p>
+type NotifyOptions = {
+  /*
+   * Kosongkan ("") untuk email yang bukan peringatan keamanan,
+   * misalnya pemberitahuan akun diaktifkan.
+   */
+  footer?: string;
+};
 
-          <p>
-            <a
-              href="${safeUrl}"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Reset Password
-            </a>
-          </p>
-
-          <p>
-            Jika kamu tidak meminta reset password,
-            abaikan email ini.
-          </p>
-        </body>
-      </html>
-    `,
+/*
+ * Notifikasi tidak boleh menggagalkan request utama.
+ */
+export function notifyUser(
+  to: string,
+  subject: string,
+  message: string,
+  options: NotifyOptions = {},
+): void {
+  sendNotice(
+    to,
+    subject,
+    message,
+    options.footer ?? DEFAULT_SECURITY_FOOTER,
+  ).catch((error) => {
+    console.error("NOTIFICATION_EMAIL_ERROR:", error);
   });
 }

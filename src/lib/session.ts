@@ -1,155 +1,110 @@
-import { SignJWT, jwtVerify } from "jose";
-import { cookies } from "next/headers";
+import "server-only";
+
+import { cache } from "react";
+import { cookies, headers } from "next/headers";
+import { createHash, randomBytes } from "crypto";
 
 import { prisma } from "@/src/lib/prisma";
-import { isUserRole, type UserRole } from "@/src/lib/roles";
+import type { UserRole } from "@/src/lib/roles";
 
-const secret = process.env.AUTH_SECRET;
+/*
+ * Session disimpan di database. Cookie hanya berisi token acak;
+ * database hanya menyimpan hash-nya. Masa berlaku absolut 3 jam.
+ */
+const SECURE = process.env.NODE_ENV === "production";
+const COOKIE_NAME = SECURE ? "__Host-sid" : "sid";
 
-if (!secret) {
-  throw new Error("AUTH_SECRET belum diset.");
-}
+export const SESSION_DURATION_MS = 3 * 60 * 60 * 1000;
 
-if (secret.length < 32) {
-  throw new Error("AUTH_SECRET harus memiliki minimal 32 karakter.");
-}
-
-const encodedKey = new TextEncoder().encode(secret);
-
-const SESSION_MAX_AGE = 60 * 60 * 24; // dalam detik, dipakai juga untuk expiry JWT
-
-const JWT_ISSUER = "contractor-management";
-const JWT_AUDIENCE = "contractor-management";
-
-const COOKIE_NAME =
-  process.env.NODE_ENV === "production"
-    ? "__Host-session"
-    : "session";
-
-export type SessionPayload = {
+export type Session = {
+  sessionId: string;
   userId: string;
   role: UserRole;
 };
 
-export async function createSession(userId: string) {
-  const user = await prisma.user.findUnique({
-    where: {
-      id: userId,
-    },
-    select: {
-      id: true,
-      role: true,
-      isActive: true,
-      tokenVersion: true,
-    },
-  });
+function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
 
-  if (!user || !user.isActive) {
-    throw new Error("User tidak valid atau tidak aktif.");
-  }
+export async function createSession(userId: string): Promise<void> {
+  const token = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
+  const userAgent =
+    (await headers()).get("user-agent")?.slice(0, 255) ?? null;
 
-  const role = String(user.role);
+  await prisma.$transaction([
+    // Bersihkan session kedaluwarsa sambil jalan.
+    prisma.session.deleteMany({
+      where: { expiresAt: { lt: new Date() } },
+    }),
+    prisma.session.create({
+      data: {
+        tokenHash: hashToken(token),
+        userId,
+        userAgent,
+        expiresAt,
+      },
+    }),
+  ]);
 
-  if (!isUserRole(role)) {
-    throw new Error("Role user tidak valid.");
-  }
+  const store = await cookies();
 
-  const token = await new SignJWT({
-    userId: user.id,
-    tokenVersion: user.tokenVersion,
-  })
-    .setProtectedHeader({
-      alg: "HS256",
-      typ: "JWT",
-    })
-    .setIssuedAt()
-    .setIssuer(JWT_ISSUER)
-    .setAudience(JWT_AUDIENCE)
-    .setExpirationTime(`${SESSION_MAX_AGE}s`)
-    .sign(encodedKey);
-
-  const cookieStore = await cookies();
-
-  cookieStore.set(COOKIE_NAME, token, {
+  store.set(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: SECURE,
     sameSite: "lax",
     path: "/",
-    maxAge: SESSION_MAX_AGE,
+    expires: expiresAt,
   });
 }
 
-export async function getSession(): Promise<SessionPayload | null> {
-  const cookieStore = await cookies();
-
-  const token = cookieStore.get(COOKIE_NAME)?.value;
+export const getSession = cache(async (): Promise<Session | null> => {
+  const store = await cookies();
+  const token = store.get(COOKIE_NAME)?.value;
 
   if (!token) {
     return null;
   }
 
-  try {
-    const { payload } = await jwtVerify(token, encodedKey, {
-      algorithms: ["HS256"],
-      issuer: JWT_ISSUER,
-      audience: JWT_AUDIENCE,
-    });
-
-    if (typeof payload.userId !== "string") {
-      return null;
-    }
-
-    if (typeof payload.tokenVersion !== "number") {
-      return null;
-    }
-
-    const user = await prisma.user.findUnique({
-      where: {
-        id: payload.userId,
+  const record = await prisma.session.findUnique({
+    where: { tokenHash: hashToken(token) },
+    select: {
+      id: true,
+      expiresAt: true,
+      user: {
+        select: {
+          id: true,
+          role: true,
+          isActive: true,
+        },
       },
-      select: {
-        id: true,
-        role: true,
-        isActive: true,
-        tokenVersion: true,
-      },
-    });
+    },
+  });
 
-    if (!user || !user.isActive) {
-      return null;
-    }
-
-    /*
-     * Token diterbitkan dengan versi lama (sebelum password diganti/
-     * direset, atau sebelum "logout semua device" dipicu) -> tolak.
-     */
-    if (user.tokenVersion !== payload.tokenVersion) {
-      return null;
-    }
-
-    const role = String(user.role);
-
-    if (!isUserRole(role)) {
-      return null;
-    }
-
-    return {
-      userId: user.id,
-      role,
-    };
-  } catch {
+  if (
+    !record ||
+    record.expiresAt <= new Date() ||
+    !record.user.isActive
+  ) {
     return null;
   }
-}
 
-export async function destroySession() {
-  const cookieStore = await cookies();
+  return {
+    sessionId: record.id,
+    userId: record.user.id,
+    role: record.user.role,
+  };
+});
 
-  cookieStore.set(COOKIE_NAME, "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 0,
-  });
+export async function destroySession(): Promise<void> {
+  const store = await cookies();
+  const token = store.get(COOKIE_NAME)?.value;
+
+  if (token) {
+    await prisma.session.deleteMany({
+      where: { tokenHash: hashToken(token) },
+    });
+  }
+
+  store.delete(COOKIE_NAME);
 }

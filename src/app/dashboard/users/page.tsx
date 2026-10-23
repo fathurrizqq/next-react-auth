@@ -1,13 +1,15 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 
-type UserRole =
-  | "USER"
-  | "ADMIN"
-  | "SUPER_ADMIN";
+type UserRole = "USER" | "ADMIN" | "SUPER_ADMIN";
 
 type User = {
   id: string;
@@ -16,20 +18,95 @@ type User = {
   role: UserRole;
   avatar: string | null;
   isActive: boolean;
-
-  // Digunakan untuk menentukan Online / Offline
   lastSeen: string | null;
+};
 
+type ActivityLog = {
+  id: string;
+  action: string;
+  actorName: string | null;
+  actorEmail: string | null;
+  detail: string | null;
+  ip: string | null;
   createdAt: string;
 };
 
 // User dianggap online jika lastSeen masih dalam 60 detik
-// yang sama dengan sistem heartbeat navbar.
+// (sama dengan sistem heartbeat navbar).
 const ONLINE_THRESHOLD = 60 * 1000;
 
-// Refresh data User Management setiap 20 detik.
-// Sama dengan interval heartbeat navbar.
+// Data user dan log diperbarui setiap 20 detik.
 const REFRESH_INTERVAL = 20 * 1000;
+
+const LOG_PAGE_SIZE = 30;
+
+const ACTION_STYLES: Record<
+  string,
+  { label: string; className: string }
+> = {
+  REGISTER: {
+    label: "Registrasi",
+    className: "bg-sky-50 text-sky-700",
+  },
+  LOGIN: {
+    label: "Login",
+    className: "bg-green-50 text-green-700",
+  },
+  LOGIN_FAILED: {
+    label: "Login gagal",
+    className: "bg-red-50 text-red-700",
+  },
+  LOGOUT: {
+    label: "Logout",
+    className: "bg-slate-100 text-slate-600",
+  },
+  PASSWORD_CHANGED: {
+    label: "Ganti password",
+    className: "bg-amber-50 text-amber-700",
+  },
+  PASSWORD_RESET: {
+    label: "Reset password",
+    className: "bg-amber-50 text-amber-700",
+  },
+  EMAIL_CHANGED: {
+    label: "Ganti email",
+    className: "bg-amber-50 text-amber-700",
+  },
+  PROFILE_UPDATED: {
+    label: "Ubah profil",
+    className: "bg-slate-100 text-slate-600",
+  },
+  USER_UPDATED: {
+    label: "Ubah user",
+    className: "bg-indigo-50 text-indigo-700",
+  },
+  USER_DELETED: {
+    label: "Hapus user",
+    className: "bg-red-50 text-red-700",
+  },
+};
+
+function isUserOnline(lastSeen: string | null) {
+  if (!lastSeen) {
+    return false;
+  }
+
+  const lastSeenTime = new Date(lastSeen).getTime();
+
+  if (Number.isNaN(lastSeenTime)) {
+    return false;
+  }
+
+  return Date.now() - lastSeenTime <= ONLINE_THRESHOLD;
+}
+
+function formatLogTime(value: string) {
+  return new Date(value).toLocaleString("id-ID", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: "Asia/Jakarta",
+  });
+}
 
 export default function UserManagementPage() {
   const router = useRouter();
@@ -39,77 +116,51 @@ export default function UserManagementPage() {
   // =========================================
 
   const [users, setUsers] = useState<User[]>([]);
-
   const [loading, setLoading] = useState(true);
-
   const [error, setError] = useState("");
 
+  // Id user yang sedang diaktifkan / dihapus.
+  const [busyId, setBusyId] = useState<string | null>(null);
+
   // =========================================
-  // SELECTED USER
+  // EDIT MODAL
   // =========================================
 
-  const [selectedUser, setSelectedUser] =
-    useState<User | null>(null);
-
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [saving, setSaving] = useState(false);
-
-  const [deleting, setDeleting] = useState(false);
-
-  // =========================================
-  // FORM
-  // =========================================
+  const [modalError, setModalError] = useState("");
 
   const [editName, setEditName] = useState("");
-
   const [editEmail, setEditEmail] = useState("");
-
-  const [editRole, setEditRole] =
-    useState<UserRole>("USER");
-
-  const [editActive, setEditActive] =
-    useState(true);
+  const [editRole, setEditRole] = useState<UserRole>("USER");
+  const [editActive, setEditActive] = useState(true);
 
   // =========================================
-  // CEK ONLINE / OFFLINE
+  // ACTIVITY LOGS
   // =========================================
 
-  function isUserOnline(
-    lastSeen: string | null,
-  ) {
-    if (!lastSeen) {
-      return false;
-    }
+  const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [logsLoading, setLogsLoading] = useState(true);
+  const [logsError, setLogsError] = useState("");
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-    const lastSeenTime =
-      new Date(lastSeen).getTime();
-
-    if (Number.isNaN(lastSeenTime)) {
-      return false;
-    }
-
-    const now = Date.now();
-
-    return (
-      now - lastSeenTime <=
-      ONLINE_THRESHOLD
-    );
-  }
+  // Cursor halaman berikutnya hanya ditentukan oleh load pertama.
+  // Refresh otomatis hanya menambahkan log baru di bagian atas.
+  const logsLoadedRef = useRef(false);
 
   // =========================================
-  // GET USERS
+  // LOAD DATA
   // =========================================
 
-  async function loadUsers() {
+  const loadUsers = useCallback(async () => {
     try {
-      const response = await fetch(
-        "/api/admin/users",
-        {
-          method: "GET",
-          cache: "no-store",
-        },
-      );
+      const response = await fetch("/api/admin/users", {
+        method: "GET",
+        cache: "no-store",
+      });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         if (response.status === 401) {
@@ -117,214 +168,183 @@ export default function UserManagementPage() {
           return;
         }
 
-        if (response.status === 403) {
-          setError(
-            data.message ??
-              "Anda tidak memiliki akses ke halaman ini. Pastikan akun Anda memiliki role SUPER_ADMIN.",
-          );
-
-          return;
-        }
-
-        throw new Error(
+        setError(
           data.message ??
-            "Gagal mengambil user.",
+            (response.status === 403
+              ? "Anda tidak memiliki akses ke halaman ini. Pastikan akun Anda memiliki role SUPER_ADMIN."
+              : "Gagal mengambil data user."),
         );
+
+        return;
       }
 
       setUsers(data.users ?? []);
-
       setError("");
-    } catch (error) {
-      console.error(
-        "LOAD_USERS_ERROR:",
-        error,
-      );
+    } catch (loadError) {
+      console.error("LOAD_USERS_ERROR:", loadError);
 
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Tidak dapat mengambil data user.",
-      );
+      setError("Tidak dapat mengambil data user.");
     } finally {
       setLoading(false);
+    }
+  }, [router]);
+
+  const refreshLogs = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `/api/admin/activity-logs?limit=${LOG_PAGE_SIZE}`,
+        {
+          method: "GET",
+          cache: "no-store",
+        },
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        if (response.status !== 401) {
+          setLogsError(
+            data.message ?? "Gagal mengambil log aktivitas.",
+          );
+        }
+
+        return;
+      }
+
+      const incoming: ActivityLog[] = data.logs ?? [];
+
+      setLogs((previous) => {
+        const known = new Set(previous.map((log) => log.id));
+
+        return [
+          ...incoming.filter((log) => !known.has(log.id)),
+          ...previous,
+        ];
+      });
+
+      if (!logsLoadedRef.current) {
+        logsLoadedRef.current = true;
+        setNextCursor(data.nextCursor ?? null);
+      }
+
+      setLogsError("");
+    } catch (logError) {
+      console.error("LOAD_LOGS_ERROR:", logError);
+
+      setLogsError("Tidak dapat mengambil log aktivitas.");
+    } finally {
+      setLogsLoading(false);
+    }
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadUsers(), refreshLogs()]);
+  }, [loadUsers, refreshLogs]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void refreshAll();
+    }, 0);
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void refreshAll();
+      }
+    }, REFRESH_INTERVAL);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.clearInterval(intervalId);
+    };
+  }, [refreshAll]);
+
+  async function handleLoadMoreLogs() {
+    if (!nextCursor || loadingMore) {
+      return;
+    }
+
+    setLoadingMore(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/activity-logs?limit=${LOG_PAGE_SIZE}&cursor=${encodeURIComponent(nextCursor)}`,
+        {
+          method: "GET",
+          cache: "no-store",
+        },
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        setLogsError(
+          data.message ?? "Gagal memuat log yang lebih lama.",
+        );
+
+        return;
+      }
+
+      const older: ActivityLog[] = data.logs ?? [];
+
+      setLogs((previous) => {
+        const known = new Set(previous.map((log) => log.id));
+
+        return [
+          ...previous,
+          ...older.filter((log) => !known.has(log.id)),
+        ];
+      });
+
+      setNextCursor(data.nextCursor ?? null);
+      setLogsError("");
+    } catch (moreError) {
+      console.error("LOAD_MORE_LOGS_ERROR:", moreError);
+
+      setLogsError("Tidak dapat memuat log yang lebih lama.");
+    } finally {
+      setLoadingMore(false);
     }
   }
 
   // =========================================
-  // INITIAL LOAD
-  // =========================================
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchUsers() {
-      try {
-        const response = await fetch(
-          "/api/admin/users",
-          {
-            method: "GET",
-            cache: "no-store",
-          },
-        );
-
-        const data = await response.json();
-
-        if (cancelled) {
-          return;
-        }
-
-        if (!response.ok) {
-          if (response.status === 401) {
-            router.push("/login");
-            return;
-          }
-
-          if (response.status === 403) {
-            setError(
-              data.message ??
-                "Anda tidak memiliki akses ke halaman ini. Pastikan akun Anda memiliki role SUPER_ADMIN.",
-            );
-
-            return;
-          }
-
-          setError(
-            data.message ??
-              "Gagal mengambil data user.",
-          );
-
-          return;
-        }
-
-        setUsers(data.users ?? []);
-
-        setError("");
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-
-        console.error(
-          "INITIAL_LOAD_USERS_ERROR:",
-          error,
-        );
-
-        setError(
-          "Tidak dapat mengambil data user.",
-        );
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    }
-
-    fetchUsers();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
-
-  // =========================================
-  // AUTO REFRESH STATUS ONLINE / OFFLINE
-  // =========================================
-  //
-  // User Management akan mengambil lastSeen
-  // terbaru setiap 20 detik.
-  //
-  // Contoh:
-  //
-  // User masih membuka dashboard
-  // -> heartbeat setiap 20 detik
-  // -> lastSeen terus berubah
-  // -> Online
-  //
-  // User menutup browser
-  // -> heartbeat berhenti
-  // -> lastSeen tidak berubah
-  // -> setelah > 60 detik menjadi Offline
-  //
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      loadUsers();
-    }, REFRESH_INTERVAL);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  });
-
-  // =========================================
-  // OPEN EDIT MODAL
+  // EDIT MODAL
   // =========================================
 
   function openEditModal(user: User) {
     setSelectedUser(user);
-
     setEditName(user.name);
-
     setEditEmail(user.email);
-
     setEditRole(user.role);
-
     setEditActive(user.isActive);
-
-    setError("");
+    setModalError("");
   }
 
-  // =========================================
-  // CLOSE EDIT MODAL
-  // =========================================
-
   function closeEditModal() {
-    if (saving || deleting) {
+    if (saving) {
       return;
     }
 
     setSelectedUser(null);
-
-    setEditName("");
-
-    setEditEmail("");
-
-    setEditRole("USER");
-
-    setEditActive(true);
+    setModalError("");
   }
 
-  // =========================================
-  // UPDATE USER
-  // =========================================
-
   async function handleUpdateUser() {
-    if (!selectedUser) {
+    if (!selectedUser || saving) {
       return;
     }
-
-    // =========================================
-    // VALIDASI NAMA
-    // =========================================
 
     if (!editName.trim()) {
-      setError("Nama wajib diisi.");
+      setModalError("Nama wajib diisi.");
       return;
     }
 
-    // =========================================
-    // VALIDASI EMAIL
-    // =========================================
-
     if (!editEmail.trim()) {
-      setError("Email wajib diisi.");
+      setModalError("Email wajib diisi.");
       return;
     }
 
     setSaving(true);
-
-    setError("");
+    setModalError("");
 
     try {
       const response = await fetch(
@@ -332,84 +352,97 @@ export default function UserManagementPage() {
         {
           method: "PATCH",
           headers: {
-            "Content-Type":
-              "application/json",
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({
             name: editName.trim(),
-
-            email: editEmail
-              .trim()
-              .toLowerCase(),
-
+            email: editEmail.trim().toLowerCase(),
             role: editRole,
-
             isActive: editActive,
           }),
         },
       );
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        setError(
-          data.message ??
+        setModalError(
+          data.errors?.name?.[0] ??
+            data.errors?.email?.[0] ??
+            data.message ??
             "Gagal memperbarui user.",
         );
 
         return;
       }
 
-      // =========================================
-      // TUTUP MODAL
-      // =========================================
-
       setSelectedUser(null);
 
-      // =========================================
-      // RESET FORM
-      // =========================================
+      await refreshAll();
+    } catch (updateError) {
+      console.error("UPDATE_USER_ERROR:", updateError);
 
-      setEditName("");
-
-      setEditEmail("");
-
-      setEditRole("USER");
-
-      setEditActive(true);
-
-      // =========================================
-      // LOAD DATA TERBARU
-      // =========================================
-
-      await loadUsers();
-
-      // =========================================
-      // REFRESH SERVER
-      // =========================================
-
-      router.refresh();
-    } catch (error) {
-      console.error(
-        "UPDATE_USER_ERROR:",
-        error,
-      );
-
-      setError(
-        "Tidak dapat terhubung ke server.",
-      );
+      setModalError("Tidak dapat terhubung ke server.");
     } finally {
       setSaving(false);
     }
   }
 
   // =========================================
-  // DELETE USER
+  // ACTIVATE / DELETE
   // =========================================
 
-  async function handleDeleteUser(
-    user: User,
-  ) {
+  async function handleActivateUser(user: User) {
+    if (busyId) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Aktifkan akun "${user.name}" (${user.email})?`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setBusyId(user.id);
+
+    try {
+      const response = await fetch(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          isActive: true,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        window.alert(data.message ?? "Gagal mengaktifkan user.");
+        return;
+      }
+
+      await refreshAll();
+    } catch (activateError) {
+      console.error("ACTIVATE_USER_ERROR:", activateError);
+
+      window.alert("Tidak dapat terhubung ke server.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDeleteUser(user: User) {
+    if (busyId) {
+      return;
+    }
+
     const confirmed = window.confirm(
       `Yakin ingin menghapus user "${user.name}"?`,
     );
@@ -418,131 +451,111 @@ export default function UserManagementPage() {
       return;
     }
 
-    setDeleting(true);
-
-    setError("");
+    setBusyId(user.id);
 
     try {
-      const response = await fetch(
-        `/api/admin/users/${user.id}`,
-        {
-          method: "DELETE",
-        },
-      );
+      const response = await fetch(`/api/admin/users/${user.id}`, {
+        method: "DELETE",
+      });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        window.alert(
-          data.message ??
-            "Gagal menghapus user.",
-        );
-
+        window.alert(data.message ?? "Gagal menghapus user.");
         return;
       }
 
-      await loadUsers();
-    } catch (error) {
-      console.error(
-        "DELETE_USER_ERROR:",
-        error,
-      );
+      await refreshAll();
+    } catch (deleteError) {
+      console.error("DELETE_USER_ERROR:", deleteError);
 
-      window.alert(
-        "Tidak dapat terhubung ke server.",
-      );
+      window.alert("Tidak dapat terhubung ke server.");
     } finally {
-      setDeleting(false);
+      setBusyId(null);
     }
   }
 
   // =========================================
-  // GROUP USER
+  // GROUP USERS
   // =========================================
 
+  const inactiveUsers = users.filter((user) => !user.isActive);
+
   const superAdmins = users.filter(
-    (user) =>
-      user.role === "SUPER_ADMIN",
+    (user) => user.isActive && user.role === "SUPER_ADMIN",
   );
 
   const admins = users.filter(
-    (user) => user.role === "ADMIN",
+    (user) => user.isActive && user.role === "ADMIN",
   );
 
   const normalUsers = users.filter(
-    (user) => user.role === "USER",
+    (user) => user.isActive && user.role === "USER",
   );
 
+  const actionsDisabled = busyId !== null || saving;
+
   // =========================================
-  // USER CARD
+  // USER SECTION
   // =========================================
 
-  function renderUserCard(
+  function renderSection(
     title: string,
-    cardUsers: User[],
+    sectionUsers: User[],
+    emptyText: string,
+    highlight = false,
   ) {
     return (
-      <section className="rounded-xl bg-white p-5 shadow-sm">
-        {/* CARD HEADER */}
-
+      <section
+        className={`rounded-xl p-5 shadow-sm ${
+          highlight
+            ? "border border-amber-200 bg-amber-50/50"
+            : "bg-white"
+        }`}
+      >
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-slate-900">
             {title}
           </h2>
 
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            {cardUsers.length}
+            {sectionUsers.length}
           </span>
         </div>
 
-        {/* EMPTY */}
-
-        {cardUsers.length === 0 ? (
+        {sectionUsers.length === 0 ? (
           <div className="rounded-lg border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-            Belum ada user.
+            {emptyText}
           </div>
         ) : (
           <div className="space-y-3">
-            {cardUsers.map((user) => {
+            {sectionUsers.map((user) => {
               const online =
-                isUserOnline(
-                  user.lastSeen,
-                );
+                user.isActive && isUserOnline(user.lastSeen);
+
+              const busy = busyId === user.id;
 
               return (
                 <div
                   key={user.id}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3"
+                  className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3"
                 >
-                  {/* USER INFO */}
-
                   <div className="flex min-w-0 items-center gap-3">
-                    {/* AVATAR */}
-
                     <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full border border-slate-200">
                       <Image
-                        src={
-                          user.avatar ??
-                          "/default-avatar.svg"
-                        }
+                        src={user.avatar ?? "/default-avatar.svg"}
                         alt={`Avatar ${user.name}`}
                         fill
                         sizes="40px"
                         className="object-cover"
                       />
 
-                      {/* ONLINE DOT */}
-
                       <span
                         className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white ${
-                          online
-                            ? "bg-green-500"
-                            : "bg-slate-300"
+                          online ? "bg-green-500" : "bg-slate-300"
                         }`}
                       />
                     </div>
-
-                    {/* NAME / EMAIL / STATUS */}
 
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-slate-900">
@@ -553,31 +566,42 @@ export default function UserManagementPage() {
                         {user.email}
                       </p>
 
-                      {/* ONLINE / OFFLINE */}
-
-                      <div className="mt-1">
-                        {online ? (
-                          <span className="text-xs font-medium text-green-600">
-                            Online
+                      <div className="mt-1 flex items-center gap-2 text-xs font-medium">
+                        {!user.isActive ? (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">
+                            Nonaktif
                           </span>
+                        ) : online ? (
+                          <span className="text-green-600">Online</span>
                         ) : (
-                          <span className="text-xs font-medium text-slate-400">
-                            Offline
+                          <span className="text-slate-400">Offline</span>
+                        )}
+
+                        {!user.isActive && (
+                          <span className="text-slate-400">
+                            {user.role}
                           </span>
                         )}
                       </div>
                     </div>
                   </div>
 
-                  {/* ACTION */}
-
                   <div className="flex shrink-0 gap-2">
+                    {!user.isActive && (
+                      <button
+                        type="button"
+                        onClick={() => handleActivateUser(user)}
+                        disabled={actionsDisabled}
+                        className="rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 transition hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {busy ? "..." : "Aktifkan"}
+                      </button>
+                    )}
+
                     <button
                       type="button"
-                      onClick={() =>
-                        openEditModal(user)
-                      }
-                      disabled={deleting}
+                      onClick={() => openEditModal(user)}
+                      disabled={actionsDisabled}
                       className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Edit
@@ -585,17 +609,11 @@ export default function UserManagementPage() {
 
                     <button
                       type="button"
-                      onClick={() =>
-                        handleDeleteUser(
-                          user,
-                        )
-                      }
-                      disabled={deleting}
+                      onClick={() => handleDeleteUser(user)}
+                      disabled={actionsDisabled}
                       className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {deleting
-                        ? "..."
-                        : "Hapus"}
+                      {busy ? "..." : "Hapus"}
                     </button>
                   </div>
                 </div>
@@ -608,14 +626,114 @@ export default function UserManagementPage() {
   }
 
   // =========================================
+  // ACTIVITY LOG PANEL
+  // =========================================
+
+  function renderLogs() {
+    return (
+      <section className="rounded-xl bg-white p-5 shadow-sm lg:sticky lg:top-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Log Aktivitas
+          </h2>
+
+          <span className="text-xs text-slate-400">
+            Diperbarui otomatis
+          </span>
+        </div>
+
+        {logsError && (
+          <div className="mb-3 rounded-lg bg-red-50 p-3 text-xs text-red-600">
+            {logsError}
+          </div>
+        )}
+
+        {logsLoading ? (
+          <div className="p-6 text-center text-sm text-slate-400">
+            Memuat log...
+          </div>
+        ) : logs.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
+            Belum ada aktivitas.
+          </div>
+        ) : (
+          <ul className="max-h-[calc(100vh-11rem)] space-y-3 overflow-y-auto pr-1">
+            {logs.map((log) => {
+              const style = ACTION_STYLES[log.action] ?? {
+                label: log.action,
+                className: "bg-slate-100 text-slate-600",
+              };
+
+              return (
+                <li
+                  key={log.id}
+                  className="rounded-lg border border-slate-200 p-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${style.className}`}
+                    >
+                      {style.label}
+                    </span>
+
+                    <time
+                      dateTime={log.createdAt}
+                      className="shrink-0 text-xs text-slate-400"
+                    >
+                      {formatLogTime(log.createdAt)}
+                    </time>
+                  </div>
+
+                  <p className="mt-2 truncate text-sm font-medium text-slate-900">
+                    {log.actorName ?? log.actorEmail ?? "Sistem"}
+                  </p>
+
+                  {log.actorName && log.actorEmail && (
+                    <p className="truncate text-xs text-slate-500">
+                      {log.actorEmail}
+                    </p>
+                  )}
+
+                  {log.detail && (
+                    <p className="mt-1 break-words text-xs text-slate-600">
+                      {log.detail}
+                    </p>
+                  )}
+
+                  {log.ip && (
+                    <p className="mt-1 text-xs text-slate-400">
+                      IP: {log.ip}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+
+            {nextCursor && (
+              <li>
+                <button
+                  type="button"
+                  onClick={handleLoadMoreLogs}
+                  disabled={loadingMore}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {loadingMore ? "Memuat..." : "Muat lebih banyak"}
+                </button>
+              </li>
+            )}
+          </ul>
+        )}
+      </section>
+    );
+  }
+
+  // =========================================
   // RENDER
   // =========================================
 
   return (
     <main className="min-h-screen bg-slate-100">
       <div className="mx-auto max-w-7xl px-6 py-8">
-        {/* HEADER */}
-
         <div className="mb-6 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">
@@ -623,23 +741,18 @@ export default function UserManagementPage() {
             </h1>
 
             <p className="mt-1 text-sm text-slate-500">
-              Kelola seluruh pengguna dan role
-              sistem.
+              Kelola seluruh pengguna dan role sistem.
             </p>
           </div>
 
           <button
             type="button"
-            onClick={() =>
-              router.push("/dashboard")
-            }
+            onClick={() => router.push("/dashboard")}
             className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
           >
             Kembali
           </button>
         </div>
-
-        {/* ERROR */}
 
         {error && (
           <div className="mb-6 rounded-lg bg-red-50 p-3 text-sm text-red-600">
@@ -647,57 +760,54 @@ export default function UserManagementPage() {
           </div>
         )}
 
-        {/* LOADING */}
-
         {loading ? (
           <div className="rounded-xl bg-white p-8 text-center text-sm text-slate-500">
             Memuat data user...
           </div>
         ) : (
-          <div className="grid gap-6 lg:grid-cols-3">
-            {/* SUPER ADMIN */}
+          <div className="grid items-start gap-6 lg:grid-cols-10">
+            {/* KIRI: 70% */}
+            <div className="space-y-6 lg:col-span-7">
+              {inactiveUsers.length > 0 &&
+                renderSection(
+                  "Menunggu Aktivasi / Nonaktif",
+                  inactiveUsers,
+                  "Tidak ada akun yang menunggu.",
+                  true,
+                )}
 
-            {renderUserCard(
-              "Super Admin",
-              superAdmins,
-            )}
+              {renderSection(
+                "Super Admin",
+                superAdmins,
+                "Belum ada user.",
+              )}
 
-            {/* ADMIN */}
+              {renderSection("Admin", admins, "Belum ada user.")}
 
-            {renderUserCard(
-              "Admin",
-              admins,
-            )}
+              {renderSection(
+                "User Biasa",
+                normalUsers,
+                "Belum ada user.",
+              )}
+            </div>
 
-            {/* USER */}
-
-            {renderUserCard(
-              "User Biasa",
-              normalUsers,
-            )}
+            {/* KANAN: 30% */}
+            <aside className="lg:col-span-3">{renderLogs()}</aside>
           </div>
         )}
       </div>
 
-      {/* =========================================
-          EDIT USER MODAL
-      ========================================= */}
-
+      {/* EDIT USER MODAL */}
       {selectedUser && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-8"
           onMouseDown={(event) => {
-            if (
-              event.target ===
-              event.currentTarget
-            ) {
+            if (event.target === event.currentTarget) {
               closeEditModal();
             }
           }}
         >
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
-            {/* MODAL HEADER */}
-
             <div className="mb-6 flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">
@@ -712,126 +822,105 @@ export default function UserManagementPage() {
               <button
                 type="button"
                 onClick={closeEditModal}
-                disabled={
-                  saving || deleting
-                }
+                disabled={saving}
+                aria-label="Tutup"
                 className="rounded-lg px-2 py-1 text-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 ×
               </button>
             </div>
 
-            {/* FORM */}
-
             <div className="space-y-4">
-              {/* NAME */}
-
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
+                <label
+                  htmlFor="edit-name"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
                   Nama
                 </label>
 
                 <input
+                  id="edit-name"
                   type="text"
                   value={editName}
-                  onChange={(event) =>
-                    setEditName(
-                      event.target.value,
-                    )
-                  }
+                  onChange={(event) => setEditName(event.target.value)}
                   disabled={saving}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-black disabled:bg-slate-50"
                   placeholder="Nama lengkap"
                 />
               </div>
 
-              {/* EMAIL */}
-
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
+                <label
+                  htmlFor="edit-email"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
                   Email
                 </label>
 
                 <input
+                  id="edit-email"
                   type="email"
                   value={editEmail}
-                  onChange={(event) =>
-                    setEditEmail(
-                      event.target.value,
-                    )
-                  }
+                  onChange={(event) => setEditEmail(event.target.value)}
                   disabled={saving}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-black disabled:bg-slate-50"
                   placeholder="email@example.com"
                 />
               </div>
 
-              {/* ROLE */}
-
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
+                <label
+                  htmlFor="edit-role"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
                   Role
                 </label>
 
                 <select
+                  id="edit-role"
                   value={editRole}
                   onChange={(event) =>
-                    setEditRole(
-                      event.target
-                        .value as UserRole,
-                    )
+                    setEditRole(event.target.value as UserRole)
                   }
                   disabled={saving}
                   className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-black disabled:bg-slate-50"
                 >
-                  <option value="USER">
-                    USER
-                  </option>
-
-                  <option value="ADMIN">
-                    ADMIN
-                  </option>
-
-                  <option value="SUPER_ADMIN">
-                    SUPER_ADMIN
-                  </option>
+                  <option value="USER">USER</option>
+                  <option value="ADMIN">ADMIN</option>
+                  <option value="SUPER_ADMIN">SUPER_ADMIN</option>
                 </select>
               </div>
-
-              {/* ACCOUNT ACTIVE */}
 
               <label className="flex items-center gap-3 rounded-lg border border-slate-200 p-3">
                 <input
                   type="checkbox"
                   checked={editActive}
-                  onChange={(event) =>
-                    setEditActive(
-                      event.target.checked,
-                    )
-                  }
+                  onChange={(event) => setEditActive(event.target.checked)}
                   disabled={saving}
                   className="h-4 w-4"
                 />
 
-                <span className="text-sm text-slate-700">
-                  Akun aktif
-                </span>
+                <span className="text-sm text-slate-700">Akun aktif</span>
               </label>
             </div>
 
-            {/* SAVE */}
+            {modalError && (
+              <div
+                role="alert"
+                className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-600"
+              >
+                {modalError}
+              </div>
+            )}
 
             <button
               type="button"
-              onClick={
-                handleUpdateUser
-              }
+              onClick={handleUpdateUser}
               disabled={saving}
               className="mt-6 w-full rounded-lg bg-black px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {saving
-                ? "Menyimpan..."
-                : "Simpan Perubahan"}
+              {saving ? "Menyimpan..." : "Simpan Perubahan"}
             </button>
           </div>
         </div>

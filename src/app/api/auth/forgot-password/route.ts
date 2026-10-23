@@ -1,210 +1,78 @@
-import { NextResponse } from "next/server";
-import {
-  randomBytes,
-  createHash,
-} from "crypto";
 import { z } from "zod";
 
 import { prisma } from "@/src/lib/prisma";
+import { issueOtp } from "@/src/lib/otp";
+import { sendOtpEmail } from "@/src/lib/mail";
 import {
-  sendPasswordResetEmail,
-} from "@/src/lib/mail";
-import {
+  jsonResponse,
+  readJson,
   requireSameOrigin,
 } from "@/src/lib/security";
 import { getClientIp, rateLimit } from "@/src/lib/rate-limit";
+import { emailSchema } from "@/src/lib/validation";
 
-const forgotPasswordSchema =
-  z.object({
-    email: z
-      .string()
-      .trim()
-      .toLowerCase()
-      .email(
-        "Format email tidak valid.",
-      )
-      .max(254),
-  });
+const schema = z.object({ email: emailSchema });
 
 const GENERIC_MESSAGE =
-  "Jika email terdaftar, link reset password akan dikirim.";
+  "Jika email terdaftar, kode reset password telah dikirim.";
 
-const FORGOT_PASSWORD_RATE_LIMIT = 3;
-const FORGOT_PASSWORD_RATE_WINDOW_MS = 15 * 60 * 1000; // 15 menit
+const WINDOW_MS = 15 * 60 * 1000;
 
 export async function POST(request: Request) {
   try {
-    const originError =
-      requireSameOrigin(request);
+    const originError = requireSameOrigin(request);
 
     if (originError) {
       return originError;
     }
 
-    const ip = getClientIp(request);
-
-    const body =
-      await request.json();
-
-    const result =
-      forgotPasswordSchema.safeParse(
-        body,
-      );
+    const result = schema.safeParse(await readJson(request));
 
     if (!result.success) {
-      return NextResponse.json(
-        {
-          message:
-            "Format email tidak valid.",
-        },
-        { status: 400 },
-      );
+      return jsonResponse({ message: "Format email tidak valid." }, 400);
     }
 
     const { email } = result.data;
+    const ip = getClientIp(request);
 
-    /*
-     * Rate limit per IP+email (cegah spam reset ke satu akun) dan
-     * per IP saja dengan limit lebih longgar (cegah spam ke banyak akun).
-     */
-    const limitByIpAndEmail = rateLimit(
-      `forgot-password:${ip}:${email}`,
-      FORGOT_PASSWORD_RATE_LIMIT,
-      FORGOT_PASSWORD_RATE_WINDOW_MS,
-    );
+    const byEmail = rateLimit(`forgot:${ip}:${email}`, 3, WINDOW_MS);
+    const byIp = rateLimit(`forgot:${ip}`, 30, WINDOW_MS);
 
-    const limitByIp = rateLimit(
-      `forgot-password:${ip}`,
-      FORGOT_PASSWORD_RATE_LIMIT * 5,
-      FORGOT_PASSWORD_RATE_WINDOW_MS,
-    );
-
-    if (!limitByIpAndEmail.success || !limitByIp.success) {
-      // Tetap balas dengan pesan generik, jangan bocorkan bahwa ini rate limit per-email.
-      return NextResponse.json(
-        { message: GENERIC_MESSAGE },
-        {
-          status: 200,
-          headers: { "Cache-Control": "no-store" },
-        },
-      );
+    // Selalu balas generik, jangan bocorkan status rate limit per email.
+    if (!byEmail.success || !byIp.success) {
+      return jsonResponse({ message: GENERIC_MESSAGE });
     }
 
-    const user =
-      await prisma.user.findUnique({
-        where: {
-          email,
-        },
-        select: {
-          id: true,
-          email: true,
-          isActive: true,
-        },
-      });
-
-    /*
-     * Jangan memberitahu apakah email
-     * benar-benar terdaftar.
-     */
-    if (!user || !user.isActive) {
-      return NextResponse.json(
-        {
-          message: GENERIC_MESSAGE,
-        },
-        {
-          status: 200,
-          headers: {
-            "Cache-Control":
-              "no-store",
-          },
-        },
-      );
-    }
-
-    await prisma.passwordResetToken.deleteMany(
-      {
-        where: {
-          userId: user.id,
-        },
-      },
-    );
-
-    const rawToken =
-      randomBytes(32).toString("hex");
-
-    const tokenHash =
-      createHash("sha256")
-        .update(rawToken)
-        .digest("hex");
-
-    const expiresAt =
-      new Date(
-        Date.now() +
-          30 * 60 * 1000,
-      );
-
-    await prisma.passwordResetToken.create({
-      data: {
-        tokenHash,
-        userId: user.id,
-        expiresAt,
-      },
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, email: true, isActive: true },
     });
 
-    const appUrl =
-      process.env.APP_URL;
+    if (user && user.isActive) {
+      const otp = await issueOtp({
+        purpose: "RESET_PASSWORD",
+        email: user.email,
+        userId: user.id,
+      });
 
-    if (!appUrl) {
-      throw new Error(
-        "APP_URL belum diset.",
-      );
-    }
-
-    const resetUrl =
-      `${appUrl.replace(/\/$/, "")}` +
-      `/reset-password?token=${rawToken}`;
-
-    try {
-      await sendPasswordResetEmail(
-        user.email,
-        resetUrl,
-      );
-    } catch (error) {
-      await prisma.passwordResetToken.deleteMany(
-        {
-          where: {
-            userId: user.id,
+      if (otp.ok) {
+        // Tidak di-await agar waktu respons sama untuk email
+        // terdaftar dan tidak terdaftar.
+        sendOtpEmail(user.email, "RESET_PASSWORD", otp.code).catch(
+          (error) => {
+            console.error("RESET_OTP_EMAIL_ERROR:", error);
           },
-        },
-      );
-
-      throw error;
+        );
+      }
     }
 
-    return NextResponse.json(
-      {
-        message: GENERIC_MESSAGE,
-      },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control":
-            "no-store",
-        },
-      },
-    );
+    return jsonResponse({ message: GENERIC_MESSAGE });
   } catch (error) {
-    console.error(
-      "FORGOT_PASSWORD_ERROR:",
-      error,
-    );
+    console.error("FORGOT_PASSWORD_ERROR:", error);
 
-    return NextResponse.json(
-      {
-        message:
-          "Terjadi kesalahan saat memproses permintaan.",
-      },
-      { status: 500 },
+    return jsonResponse(
+      { message: "Terjadi kesalahan saat memproses permintaan." },
+      500,
     );
   }
 }

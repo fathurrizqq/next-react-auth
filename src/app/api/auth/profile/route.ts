@@ -1,69 +1,42 @@
-import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import path from "path";
-import {
-  mkdir,
-  writeFile,
-  unlink,
-} from "fs/promises";
+import { mkdir, unlink, writeFile } from "fs/promises";
 import { z } from "zod";
 
 import { prisma } from "@/src/lib/prisma";
 import { getSession } from "@/src/lib/session";
 import {
+  jsonResponse,
   requireSameOrigin,
+  unauthorized,
 } from "@/src/lib/security";
+import { logActivity } from "@/src/lib/audit";
+import { AVATAR_DIR, resolveAvatarPath } from "@/src/lib/avatar";
+import { nameSchema } from "@/src/lib/validation";
 
-const MAX_AVATAR_SIZE =
-  2 * 1024 * 1024;
+const MAX_AVATAR_SIZE = 2 * 1024 * 1024;
+const MAX_REQUEST_SIZE = 3 * 1024 * 1024;
 
-const profileSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(
-      4,
-      "Nama minimal 4 karakter.",
-    )
-    .max(
-      100,
-      "Nama maksimal 100 karakter.",
-    ),
-
-  email: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .email("Email tidak valid.")
-    .max(254),
-});
+const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 type ImageType = {
   mime: string;
   extension: string;
 };
 
-function detectImageType(
-  buffer: Buffer,
-): ImageType | null {
-  /*
-   * JPEG
-   */
+/*
+ * Deteksi tipe gambar dari magic bytes, bukan dari nama/MIME kiriman user.
+ */
+function detectImageType(buffer: Buffer): ImageType | null {
   if (
     buffer.length >= 3 &&
     buffer[0] === 0xff &&
     buffer[1] === 0xd8 &&
     buffer[2] === 0xff
   ) {
-    return {
-      mime: "image/jpeg",
-      extension: "jpg",
-    };
+    return { mime: "image/jpeg", extension: "jpg" };
   }
 
-  /*
-   * PNG
-   */
   if (
     buffer.length >= 8 &&
     buffer[0] === 0x89 &&
@@ -75,368 +48,163 @@ function detectImageType(
     buffer[6] === 0x1a &&
     buffer[7] === 0x0a
   ) {
-    return {
-      mime: "image/png",
-      extension: "png",
-    };
+    return { mime: "image/png", extension: "png" };
   }
 
-  /*
-   * WEBP
-   */
   if (
     buffer.length >= 12 &&
-    buffer.toString(
-      "ascii",
-      0,
-      4,
-    ) === "RIFF" &&
-    buffer.toString(
-      "ascii",
-      8,
-      12,
-    ) === "WEBP"
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP"
   ) {
-    return {
-      mime: "image/webp",
-      extension: "webp",
-    };
+    return { mime: "image/webp", extension: "webp" };
   }
 
   return null;
 }
 
-export async function POST(
-  request: Request,
-) {
+export async function POST(request: Request) {
   try {
-    const originError =
-      requireSameOrigin(request);
+    const originError = requireSameOrigin(request);
 
     if (originError) {
       return originError;
     }
 
-    const session =
-      await getSession();
+    const session = await getSession();
 
     if (!session) {
-      return NextResponse.json(
+      return unauthorized();
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: session.userId },
+      select: {
+        id: true,
+        email: true,
+        avatar: true,
+        isActive: true,
+      },
+    });
+
+    if (!user || !user.isActive) {
+      return unauthorized();
+    }
+
+    const contentLength = request.headers.get("content-length");
+
+    if (contentLength && Number(contentLength) > MAX_REQUEST_SIZE) {
+      return jsonResponse({ message: "Ukuran request terlalu besar." }, 413);
+    }
+
+    const formData = await request.formData().catch(() => null);
+
+    if (!formData) {
+      return jsonResponse({ message: "Data profile tidak valid." }, 400);
+    }
+
+    const nameValue = formData.get("name");
+    const avatarValue = formData.get("avatar");
+
+    if (typeof nameValue !== "string") {
+      return jsonResponse({ message: "Data profile tidak valid." }, 400);
+    }
+
+    const result = z
+      .object({ name: nameSchema })
+      .safeParse({ name: nameValue });
+
+    if (!result.success) {
+      return jsonResponse(
         {
-          message:
-            "Anda harus login terlebih dahulu.",
+          message: "Data profile tidak valid.",
+          errors: result.error.flatten().fieldErrors,
         },
-        { status: 401 },
+        400,
       );
     }
 
-    const user =
-      await prisma.user.findUnique({
-        where: {
-          id: session.userId,
+    let avatarUrl = user.avatar;
+    let newAvatarPath: string | null = null;
+
+    if (avatarValue instanceof File && avatarValue.size > 0) {
+      if (avatarValue.size > MAX_AVATAR_SIZE) {
+        return jsonResponse({ message: "Ukuran foto maksimal 2 MB." }, 400);
+      }
+
+      if (!ALLOWED_MIME_TYPES.includes(avatarValue.type)) {
+        return jsonResponse(
+          { message: "Format foto harus JPG, PNG, atau WEBP." },
+          400,
+        );
+      }
+
+      const buffer = Buffer.from(await avatarValue.arrayBuffer());
+      const detected = detectImageType(buffer);
+
+      if (!detected || detected.mime !== avatarValue.type) {
+        return jsonResponse({ message: "File gambar tidak valid." }, 400);
+      }
+
+      const fileName = `${user.id}-${randomUUID()}.${detected.extension}`;
+
+      await mkdir(AVATAR_DIR, { recursive: true });
+
+      newAvatarPath = path.join(AVATAR_DIR, fileName);
+
+      await writeFile(newAvatarPath, buffer, { flag: "wx" });
+
+      avatarUrl = `/api/avatars/${fileName}`;
+    }
+
+    try {
+      const updatedUser = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          name: result.data.name,
+          avatar: avatarUrl,
         },
         select: {
           id: true,
           name: true,
           email: true,
-          avatar: true,
-          isActive: true,
           role: true,
+          avatar: true,
         },
       });
 
-    if (!user || !user.isActive) {
-      return NextResponse.json(
-        {
-          message:
-            "Akun tidak dapat digunakan.",
-        },
-        { status: 401 },
-      );
-    }
+      // Database sudah berhasil, baru hapus avatar lama.
+      const oldPath = newAvatarPath ? resolveAvatarPath(user.avatar) : null;
 
-    const contentLength =
-      request.headers.get(
-        "content-length",
-      );
+      if (oldPath) {
+        await unlink(oldPath).catch(() => undefined);
+      }
 
-    if (
-      contentLength &&
-      Number(contentLength) >
-        3 * 1024 * 1024
-    ) {
-      return NextResponse.json(
-        {
-          message:
-            "Ukuran request terlalu besar.",
-        },
-        { status: 413 },
-      );
-    }
-
-    const formData =
-      await request.formData();
-
-    const nameValue =
-      formData.get("name");
-
-    const emailValue =
-      formData.get("email");
-
-    const avatarValue =
-      formData.get("avatar");
-
-    if (
-      typeof nameValue !== "string" ||
-      typeof emailValue !== "string"
-    ) {
-      return NextResponse.json(
-        {
-          message:
-            "Data profile tidak valid.",
-        },
-        { status: 400 },
-      );
-    }
-
-    const result =
-      profileSchema.safeParse({
-        name: nameValue,
-        email: emailValue,
+      await logActivity({
+        request,
+        action: "PROFILE_UPDATED",
+        actorId: user.id,
+        actorEmail: user.email,
+        detail: newAvatarPath ? "Nama dan foto profil" : "Nama",
       });
 
-    if (!result.success) {
-      return NextResponse.json(
-        {
-          message:
-            "Data profile tidak valid.",
-          errors:
-            result.error.flatten()
-              .fieldErrors,
-        },
-        { status: 400 },
-      );
-    }
-
-    const {
-      name,
-      email,
-    } = result.data;
-
-    let avatarUrl =
-      user.avatar;
-
-    let newAvatarPath:
-      | string
-      | null = null;
-
-    if (
-      avatarValue instanceof File &&
-      avatarValue.size > 0
-    ) {
-      if (
-        avatarValue.size >
-        MAX_AVATAR_SIZE
-      ) {
-        return NextResponse.json(
-          {
-            message:
-              "Ukuran foto maksimal 2 MB.",
-          },
-          { status: 400 },
-        );
-      }
-
-      const allowedMimeTypes = [
-        "image/jpeg",
-        "image/png",
-        "image/webp",
-      ];
-
-      if (
-        !allowedMimeTypes.includes(
-          avatarValue.type,
-        )
-      ) {
-        return NextResponse.json(
-          {
-            message:
-              "Format foto harus JPG, PNG, atau WEBP.",
-          },
-          { status: 400 },
-        );
-      }
-
-      const bytes =
-        await avatarValue.arrayBuffer();
-
-      const buffer =
-        Buffer.from(bytes);
-
-      const detectedType =
-        detectImageType(buffer);
-
-      if (
-        !detectedType ||
-        detectedType.mime !==
-          avatarValue.type
-      ) {
-        return NextResponse.json(
-          {
-            message:
-              "File gambar tidak valid.",
-          },
-          { status: 400 },
-        );
-      }
-
-      const fileName =
-        `${user.id}-${randomUUID()}.` +
-        detectedType.extension;
-
-      const uploadDirectory =
-        path.join(
-          process.cwd(),
-          "public",
-          "uploads",
-          "avatars",
-        );
-
-      await mkdir(
-        uploadDirectory,
-        {
-          recursive: true,
-        },
-      );
-
-      const filePath =
-        path.join(
-          uploadDirectory,
-          fileName,
-        );
-
-      await writeFile(
-        filePath,
-        buffer,
-        {
-          flag: "wx",
-        },
-      );
-
-      newAvatarPath =
-        filePath;
-
-      avatarUrl =
-        `/uploads/avatars/${fileName}`;
-    }
-
-    try {
-      const updatedUser =
-        await prisma.user.update({
-          where: {
-            id: user.id,
-          },
-          data: {
-            name,
-            email,
-            avatar: avatarUrl,
-          },
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
-            avatar: true,
-          },
-        });
-
-      /*
-       * Database sudah berhasil.
-       * Baru hapus avatar lama.
-       */
-      if (
-        newAvatarPath &&
-        user.avatar?.startsWith(
-          "/uploads/avatars/",
-        )
-      ) {
-        const oldFilePath =
-          path.join(
-            process.cwd(),
-            "public",
-            user.avatar,
-          );
-
-        try {
-          await unlink(
-            oldFilePath,
-          );
-        } catch {
-          /*
-           * Avatar lama tidak ditemukan
-           * tidak menggagalkan update profile.
-           */
-        }
-      }
-
-      return NextResponse.json(
-        {
-          message:
-            "Profile berhasil diperbarui.",
-          user: updatedUser,
-        },
-        {
-          status: 200,
-          headers: {
-            "Cache-Control":
-              "no-store",
-          },
-        },
-      );
-    } catch (error: unknown) {
-      /*
-       * Kalau DB gagal setelah file baru
-       * berhasil dibuat, hapus file baru.
-       */
+      return jsonResponse({
+        message: "Profile berhasil diperbarui.",
+        user: updatedUser,
+      });
+    } catch (error) {
+      // DB gagal setelah file baru tersimpan: hapus file baru.
       if (newAvatarPath) {
-        try {
-          await unlink(
-            newAvatarPath,
-          );
-        } catch {
-          // abaikan cleanup error
-        }
-      }
-
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "P2002"
-      ) {
-        return NextResponse.json(
-          {
-            message:
-              "Email sudah digunakan user lain.",
-          },
-          { status: 409 },
-        );
+        await unlink(newAvatarPath).catch(() => undefined);
       }
 
       throw error;
     }
   } catch (error) {
-    console.error(
-      "PROFILE_UPDATE_ERROR:",
-      error,
-    );
+    console.error("PROFILE_UPDATE_ERROR:", error);
 
-    return NextResponse.json(
-      {
-        message:
-          "Terjadi kesalahan saat memperbarui profile.",
-      },
-      { status: 500 },
+    return jsonResponse(
+      { message: "Terjadi kesalahan saat memperbarui profile." },
+      500,
     );
   }
 }

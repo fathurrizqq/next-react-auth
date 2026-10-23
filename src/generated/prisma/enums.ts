@@ -16,3 +16,13 @@ export const UserRole = {
 } as const
 
 export type UserRole = (typeof UserRole)[keyof typeof UserRole]
+
+
+export const OtpPurpose = {
+  REGISTER: 'REGISTER',
+  RESET_PASSWORD: 'RESET_PASSWORD',
+  CHANGE_PASSWORD: 'CHANGE_PASSWORD',
+  CHANGE_EMAIL: 'CHANGE_EMAIL'
+} as const
+
+export type OtpPurpose = (typeof OtpPurpose)[keyof typeof OtpPurpose]

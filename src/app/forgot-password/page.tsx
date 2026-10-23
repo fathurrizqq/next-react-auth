@@ -1,155 +1,284 @@
 "use client";
 
-import {
-  FormEvent,
-  useState,
-} from "react";
-
+import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+
+import Alert from "@/src/app/components/Alert";
+import CodeInput from "@/src/app/components/CodeInput";
+import PasswordInput from "@/src/app/components/PasswordInput";
+import PasswordRules from "@/src/app/components/PasswordRules";
+import { postJson } from "@/src/lib/api-client";
+import { PASSWORD_RULES } from "@/src/lib/validation";
+
+type Step = "email" | "reset";
+
+const RESEND_SECONDS = 60;
 
 export default function ForgotPasswordPage() {
-  const [email, setEmail] =
-    useState("");
+  const router = useRouter();
 
-  const [error, setError] =
-    useState("");
+  const [step, setStep] = useState<Step>("email");
 
-  const [success, setSuccess] =
-    useState("");
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
-  const [loading, setLoading] =
-    useState(false);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
 
-  async function handleSubmit(
-    event: FormEvent<HTMLFormElement>,
-  ) {
+  useEffect(() => {
+    if (cooldown <= 0) return;
+
+    const timeoutId = window.setTimeout(
+      () => setCooldown((current) => current - 1),
+      1000,
+    );
+
+    return () => window.clearTimeout(timeoutId);
+  }, [cooldown]);
+
+  async function requestCode() {
+    setLoading(true);
+
+    const result = await postJson("/api/auth/forgot-password", {
+      email: email.trim().toLowerCase(),
+    });
+
+    setLoading(false);
+
+    if (!result.ok) {
+      setError(result.message);
+      return false;
+    }
+
+    setInfo(result.message);
+    setCooldown(RESEND_SECONDS);
+
+    return true;
+  }
+
+  async function handleRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (loading) return;
+
     setError("");
-    setSuccess("");
+    setInfo("");
 
     if (!email.trim()) {
-      setError(
-        "Email wajib diisi.",
-      );
+      setError("Email wajib diisi.");
+      return;
+    }
+
+    if (await requestCode()) {
+      setStep("reset");
+    }
+  }
+
+  async function handleResend() {
+    if (loading || cooldown > 0) return;
+
+    setError("");
+    await requestCode();
+  }
+
+  async function handleReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (loading) return;
+
+    setError("");
+
+    if (code.length !== 6) {
+      setError("Masukkan 6 digit kode verifikasi.");
+      return;
+    }
+
+    if (!PASSWORD_RULES.every((rule) => rule.test(newPassword))) {
+      setError("Password belum memenuhi semua persyaratan.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setError("Password dan konfirmasi password tidak sama.");
       return;
     }
 
     setLoading(true);
 
-    try {
-      const response =
-        await fetch(
-          "/api/auth/forgot-password",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body: JSON.stringify({
-              email:
-                email.trim().toLowerCase(),
-            }),
-          },
-        );
+    const result = await postJson("/api/auth/reset-password", {
+      email: email.trim().toLowerCase(),
+      code,
+      newPassword,
+      confirmPassword,
+    });
 
-      const data =
-        await response.json();
-
-      if (!response.ok) {
-        setError(
-          data.message ??
-            "Gagal memproses permintaan.",
-        );
-        return;
-      }
-
-      setSuccess(
-        "Jika email terdaftar, link reset password akan dikirim ke email tersebut.",
-      );
-
-      setEmail("");
-    } catch {
-      setError(
-        "Tidak dapat terhubung ke server.",
-      );
-    } finally {
+    if (!result.ok) {
       setLoading(false);
+      setError(result.message);
+      return;
     }
+
+    setInfo("Password berhasil direset. Mengarahkan ke halaman login...");
+
+    window.setTimeout(() => router.push("/login"), 1500);
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
+    <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-8">
       <div className="w-full max-w-md rounded-xl bg-white p-8 shadow">
-        <h1 className="text-2xl font-bold text-slate-900">
+        <h1 className="mb-2 text-2xl font-bold text-slate-900">
           Lupa Password
         </h1>
 
-        <p className="mb-6 mt-2 text-sm text-slate-500">
-          Masukkan email akun kamu.
-          Kami akan mengirimkan link
-          untuk membuat password baru.
-        </p>
+        {step === "email" ? (
+          <>
+            <p className="mb-6 text-sm text-slate-500">
+              Masukkan email akun Anda. Kode reset akan dikirim jika email
+              terdaftar.
+            </p>
 
-        <form
-          onSubmit={handleSubmit}
-          className="space-y-4"
-        >
-          <div>
-            <label
-              htmlFor="email"
-              className="mb-1 block text-sm font-medium text-slate-700"
-            >
-              Email
-            </label>
+            <form onSubmit={handleRequest} className="space-y-4">
+              <div>
+                <label
+                  htmlFor="email"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
+                  Email
+                </label>
 
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(event) =>
-                setEmail(
-                  event.target.value,
-                )
-              }
-              placeholder="email@example.com"
-              autoComplete="email"
-              disabled={loading}
-              className="w-full rounded-lg border px-3 py-2 outline-none focus:border-black disabled:bg-slate-50"
-            />
-          </div>
+                <input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="email"
+                  placeholder="email@example.com"
+                  disabled={loading}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-black focus:ring-1 focus:ring-black"
+                />
+              </div>
 
-          {error && (
-            <div className="rounded-lg bg-red-50 p-3 text-sm text-red-600">
-              {error}
-            </div>
-          )}
+              {error && <Alert type="error">{error}</Alert>}
 
-          {success && (
-            <div className="rounded-lg bg-green-50 p-3 text-sm text-green-600">
-              {success}
-            </div>
-          )}
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full rounded-lg bg-black px-4 py-2 text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {loading ? "Mengirim..." : "Kirim Kode"}
+              </button>
+            </form>
+          </>
+        ) : (
+          <>
+            <p className="mb-6 text-sm text-slate-500">
+              Masukkan kode yang dikirim ke{" "}
+              <span className="font-medium text-slate-700">
+                {email.trim().toLowerCase()}
+              </span>{" "}
+              dan buat password baru.
+            </p>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-lg bg-black px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {loading
-              ? "Mengirim..."
-              : "Kirim Link Reset"}
-          </button>
-        </form>
+            <form onSubmit={handleReset} className="space-y-4">
+              <CodeInput
+                id="code"
+                value={code}
+                onChange={setCode}
+                disabled={loading}
+              />
+
+              <div>
+                <PasswordInput
+                  id="newPassword"
+                  label="Password Baru"
+                  value={newPassword}
+                  onChange={setNewPassword}
+                  autoComplete="new-password"
+                  placeholder="Password baru"
+                  disabled={loading}
+                />
+
+                <PasswordRules value={newPassword} />
+              </div>
+
+              <div>
+                <PasswordInput
+                  id="confirmPassword"
+                  label="Ulangi Password Baru"
+                  value={confirmPassword}
+                  onChange={setConfirmPassword}
+                  autoComplete="new-password"
+                  placeholder="Ulangi password baru"
+                  disabled={loading}
+                />
+
+                {confirmPassword && (
+                  <p
+                    className={`mt-1 text-xs ${
+                      newPassword === confirmPassword
+                        ? "text-green-600"
+                        : "text-red-500"
+                    }`}
+                  >
+                    {newPassword === confirmPassword
+                      ? "Password cocok."
+                      : "Password tidak sama."}
+                  </p>
+                )}
+              </div>
+
+              {info && <Alert type="success">{info}</Alert>}
+              {error && <Alert type="error">{error}</Alert>}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full rounded-lg bg-black px-4 py-2 text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {loading ? "Menyimpan..." : "Reset Password"}
+              </button>
+
+              <div className="flex items-center justify-between text-sm">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep("email");
+                    setCode("");
+                    setError("");
+                    setInfo("");
+                  }}
+                  disabled={loading}
+                  className="text-slate-600 underline underline-offset-2 hover:text-black"
+                >
+                  Ubah email
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResend}
+                  disabled={loading || cooldown > 0}
+                  className="text-slate-600 underline underline-offset-2 hover:text-black disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
+                >
+                  {cooldown > 0
+                    ? `Kirim ulang (${cooldown}s)`
+                    : "Kirim ulang kode"}
+                </button>
+              </div>
+            </form>
+          </>
+        )}
 
         <p className="mt-6 text-center text-sm text-slate-500">
-          Ingat password?{" "}
           <Link
             href="/login"
-            className="font-medium text-black underline"
+            className="font-medium text-black underline underline-offset-2"
           >
-            Login
+            Kembali ke Login
           </Link>
         </p>
       </div>
