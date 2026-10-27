@@ -1,3 +1,7 @@
+// PasswordSection.tsx
+// Ganti password dalam 2 langkah: (1) isi password lama, (2) masukkan kode OTP dari email
+// dan password baru.
+
 "use client";
 
 import { useState, type FormEvent } from "react";
@@ -9,20 +13,28 @@ import PasswordRules from "@/src/app/components/PasswordRules";
 import { postJson } from "@/src/lib/api-client";
 import { PASSWORD_RULES } from "@/src/lib/validation";
 
+// Langkah saat ini: form = password lama, verify = kode + password baru.
 type Step = "form" | "verify";
 
+// Bagian ganti password di modal profil.
 export default function PasswordSection() {
+  // Langkah yang sedang tampil.
   const [step, setStep] = useState<Step>("form");
 
+  // Password lama.
   const [currentPassword, setCurrentPassword] = useState("");
+  // Kode OTP yang diketik.
   const [code, setCode] = useState("");
+  // Password baru.
   const [newPassword, setNewPassword] = useState("");
+  // Ulangi password baru.
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  // Langkah 1: verifikasi password lama dan minta kode OTP.
   async function handleRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -38,6 +50,7 @@ export default function PasswordSection() {
 
     setLoading(true);
 
+    // Kirim permintaan ke server.
     const result = await postJson("/api/auth/change-password/request", {
       currentPassword,
     });
@@ -51,9 +64,11 @@ export default function PasswordSection() {
 
     setSuccess(result.message);
     setCurrentPassword("");
+    // Berhasil: lanjut ke langkah memasukkan kode dan password baru.
     setStep("verify");
   }
 
+  // Langkah 2: kirim kode + password baru.
   async function handleConfirm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -62,16 +77,19 @@ export default function PasswordSection() {
     setError("");
     setSuccess("");
 
+    // Kode harus 6 digit.
     if (code.length !== 6) {
       setError("Masukkan 6 digit kode verifikasi.");
       return;
     }
 
+    // Password baru harus memenuhi semua syarat (server tetap memeriksa ulang).
     if (!PASSWORD_RULES.every((rule) => rule.test(newPassword))) {
       setError("Password baru belum memenuhi semua persyaratan.");
       return;
     }
 
+    // Konfirmasi harus sama.
     if (newPassword !== confirmPassword) {
       setError("Password baru dan konfirmasi password tidak sama.");
       return;
@@ -79,6 +97,7 @@ export default function PasswordSection() {
 
     setLoading(true);
 
+    // Kirim data ke server.
     const result = await postJson("/api/auth/change-password/confirm", {
       code,
       newPassword,
@@ -110,6 +129,7 @@ export default function PasswordSection() {
         diganti seminggu sekali.
       </p>
 
+      {/* Tampilkan form langkah 1 atau langkah 2. */}
       {step === "form" ? (
         <form onSubmit={handleRequest} className="space-y-3">
           <PasswordInput

@@ -1,3 +1,7 @@
+// forgot-password/page.tsx
+// Halaman lupa password 2 langkah: (1) isi email -> kode OTP dikirim,
+// (2) masukkan kode + password baru.
+
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
@@ -11,25 +15,35 @@ import PasswordRules from "@/src/app/components/PasswordRules";
 import { postJson } from "@/src/lib/api-client";
 import { PASSWORD_RULES } from "@/src/lib/validation";
 
+// Langkah saat ini: email = isi email, reset = kode + password baru.
 type Step = "email" | "reset";
 
+// Jeda tombol "Kirim ulang" (sama dengan batas di server).
 const RESEND_SECONDS = 60;
 
+// Komponen halaman lupa password.
 export default function ForgotPasswordPage() {
   const router = useRouter();
 
+  // Langkah yang sedang tampil.
   const [step, setStep] = useState<Step>("email");
 
+  // Isian form.
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
+  // Pesan error.
   const [error, setError] = useState("");
+  // Pesan informasi / sukses.
   const [info, setInfo] = useState("");
+  // true saat ada proses yang berjalan.
   const [loading, setLoading] = useState(false);
+  // Sisa detik sebelum boleh kirim ulang kode.
   const [cooldown, setCooldown] = useState(0);
 
+  // Hitung mundur cooldown tiap detik.
   useEffect(() => {
     if (cooldown <= 0) return;
 
@@ -41,6 +55,7 @@ export default function ForgotPasswordPage() {
     return () => window.clearTimeout(timeoutId);
   }, [cooldown]);
 
+  // Minta server mengirim kode OTP. Mengembalikan true jika berhasil.
   async function requestCode() {
     setLoading(true);
 
@@ -61,6 +76,7 @@ export default function ForgotPasswordPage() {
     return true;
   }
 
+  // Langkah 1: kirim email untuk meminta kode.
   async function handleRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -79,6 +95,7 @@ export default function ForgotPasswordPage() {
     }
   }
 
+  // Kirim ulang kode (hanya bila cooldown sudah habis).
   async function handleResend() {
     if (loading || cooldown > 0) return;
 
@@ -86,6 +103,7 @@ export default function ForgotPasswordPage() {
     await requestCode();
   }
 
+  // Langkah 2: kirim kode + password baru.
   async function handleReset(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -98,6 +116,7 @@ export default function ForgotPasswordPage() {
       return;
     }
 
+    // Password baru harus memenuhi semua syarat (server tetap memeriksa ulang).
     if (!PASSWORD_RULES.every((rule) => rule.test(newPassword))) {
       setError("Password belum memenuhi semua persyaratan.");
       return;
@@ -125,6 +144,7 @@ export default function ForgotPasswordPage() {
 
     setInfo("Password berhasil direset. Mengarahkan ke halaman login...");
 
+    // Setelah 1,5 detik arahkan ke halaman login.
     window.setTimeout(() => router.push("/login"), 1500);
   }
 
@@ -135,6 +155,7 @@ export default function ForgotPasswordPage() {
           Lupa Password
         </h1>
 
+        {/* Tampilkan form langkah 1 atau langkah 2. */}
         {step === "email" ? (
           <>
             <p className="mb-6 text-sm text-slate-500">

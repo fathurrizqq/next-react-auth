@@ -1,3 +1,7 @@
+// register/page.tsx
+// Halaman registrasi 2 langkah: (1) isi data -> kode OTP dikirim ke email,
+// (2) masukkan kode. Akun baru menunggu aktivasi Super Admin.
+
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
@@ -11,26 +15,37 @@ import PasswordRules from "@/src/app/components/PasswordRules";
 import { postJson } from "@/src/lib/api-client";
 import { PASSWORD_RULES } from "@/src/lib/validation";
 
+// Langkah saat ini: form = isi data, verify = masukkan kode.
 type Step = "form" | "verify";
 
+// Jeda tombol "Kirim ulang" (sama dengan batas di server).
 const RESEND_SECONDS = 60;
 
+// Komponen halaman registrasi.
 export default function RegisterPage() {
   const router = useRouter();
 
+  // Langkah yang sedang tampil.
   const [step, setStep] = useState<Step>("form");
 
+  // Isian form registrasi.
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  // Kode OTP yang diketik.
   const [code, setCode] = useState("");
 
+  // Pesan error.
   const [error, setError] = useState("");
+  // Pesan informasi / sukses.
   const [info, setInfo] = useState("");
+  // true saat ada proses yang berjalan.
   const [loading, setLoading] = useState(false);
+  // Sisa detik sebelum boleh kirim ulang kode.
   const [cooldown, setCooldown] = useState(0);
 
+  // Hitung mundur cooldown tiap detik.
   useEffect(() => {
     if (cooldown <= 0) return;
 
@@ -42,6 +57,7 @@ export default function RegisterPage() {
     return () => window.clearTimeout(timeoutId);
   }, [cooldown]);
 
+  // Minta server mengirim kode OTP ke email. Mengembalikan true jika berhasil.
   async function requestCode() {
     setLoading(true);
 
@@ -64,6 +80,7 @@ export default function RegisterPage() {
     return true;
   }
 
+  // Langkah 1: validasi singkat lalu minta kode OTP.
   async function handleSubmitForm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -82,6 +99,7 @@ export default function RegisterPage() {
       return;
     }
 
+    // Password harus memenuhi semua syarat (server tetap memeriksa ulang).
     if (!PASSWORD_RULES.every((rule) => rule.test(password))) {
       setError("Password belum memenuhi semua persyaratan.");
       return;
@@ -97,6 +115,7 @@ export default function RegisterPage() {
     }
   }
 
+  // Kirim ulang kode (hanya bila cooldown sudah habis).
   async function handleResend() {
     if (loading || cooldown > 0) return;
 
@@ -104,6 +123,7 @@ export default function RegisterPage() {
     await requestCode();
   }
 
+  // Langkah 2: kirim kode OTP; jika benar, akun dibuat.
   async function handleVerify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -131,8 +151,10 @@ export default function RegisterPage() {
 
     // Pesan dari server menjelaskan bahwa akun menunggu aktivasi.
     // Tombol tetap nonaktif (loading) sampai redirect.
+    // Tampilkan pesan dari server (akun menunggu aktivasi) dan biarkan tombol tetap nonaktif.
     setInfo(result.message);
 
+    // Setelah 4 detik arahkan ke halaman login.
     window.setTimeout(() => router.push("/login"), 4000);
   }
 
@@ -141,6 +163,7 @@ export default function RegisterPage() {
       <div className="w-full max-w-md rounded-xl bg-white p-8 shadow">
         <h1 className="mb-2 text-2xl font-bold text-slate-900">Register</h1>
 
+        {/* Tampilkan form langkah 1 atau langkah 2. */}
         {step === "form" ? (
           <>
             <p className="mb-6 text-sm text-slate-500">

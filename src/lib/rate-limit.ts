@@ -1,8 +1,13 @@
+// rate-limit.ts
+// Pembatas jumlah percobaan (rate limit) agar login, OTP, dll. tidak bisa di-brute force / di-spam.
+
+// Catatan satu kunci: jumlah percobaan dan kapan hitungan direset.
 type RateLimitRecord = {
   count: number;
   resetAt: number;
 };
 
+// Penyimpanan di memori: kunci -> catatan.
 const store = new Map<string, RateLimitRecord>();
 
 // Bersihkan record kadaluarsa secara periodik agar Map tidak membengkak terus.
@@ -17,8 +22,11 @@ const cleanupInterval = setInterval(() => {
 
 cleanupInterval.unref?.();
 
+// Hasil pengecekan batas.
 type RateLimitResult = {
+  // true = masih boleh, false = sudah melewati batas.
   success: boolean;
+  // Sisa percobaan pada jendela waktu ini.
   remaining: number;
   resetAt: number;
 };
@@ -42,16 +50,19 @@ export function rateLimit(
   const now = Date.now();
   const record = store.get(key);
 
+  // Belum ada catatan, atau jendela waktu sudah lewat -> mulai hitungan baru.
   if (!record || record.resetAt <= now) {
     const resetAt = now + windowMs;
     store.set(key, { count: 1, resetAt });
     return { success: true, remaining: limit - 1, resetAt };
   }
 
+  // Sudah mencapai batas -> tolak.
   if (record.count >= limit) {
     return { success: false, remaining: 0, resetAt: record.resetAt };
   }
 
+  // Masih di bawah batas -> tambah hitungan.
   record.count += 1;
 
   return {
@@ -61,10 +72,12 @@ export function rateLimit(
   };
 }
 
+// Ambil IP pengunjung dari header proxy (x-forwarded-for / x-real-ip).
 export function getClientIp(request: Request): string {
   const forwardedFor = request.headers.get("x-forwarded-for");
 
   if (forwardedFor) {
+    // Formatnya "ip-asli, proxy1, proxy2" -> ambil yang pertama.
     return forwardedFor.split(",")[0].trim();
   }
 
@@ -74,5 +87,6 @@ export function getClientIp(request: Request): string {
     return realIp;
   }
 
+  // IP tidak diketahui (mis. saat development tanpa proxy).
   return "unknown";
 }

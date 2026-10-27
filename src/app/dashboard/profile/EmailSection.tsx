@@ -1,3 +1,7 @@
+// EmailSection.tsx
+// Ganti email dalam 2 langkah: (1) isi email baru + password, (2) masukkan kode OTP
+// yang dikirim ke email baru.
+
 "use client";
 
 import { useState, type FormEvent } from "react";
@@ -8,8 +12,10 @@ import CodeInput from "@/src/app/components/CodeInput";
 import PasswordInput from "@/src/app/components/PasswordInput";
 import { postJson } from "@/src/lib/api-client";
 
+// Langkah saat ini: form = isi data, verify = masukkan kode.
 type Step = "form" | "verify";
 
+// Bagian ganti email di modal profil.
 export default function EmailSection({
   currentEmail,
 }: {
@@ -17,18 +23,24 @@ export default function EmailSection({
 }) {
   const router = useRouter();
 
+  // Langkah yang sedang tampil.
   const [step, setStep] = useState<Step>("form");
 
+  // Email baru yang diketik.
   const [newEmail, setNewEmail] = useState("");
+  // Password saat ini (bukti bahwa ini pemilik akun).
   const [password, setPassword] = useState("");
+  // Kode OTP yang diketik.
   const [code, setCode] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  // Email dibersihkan: tanpa spasi dan huruf kecil.
   const normalizedEmail = newEmail.trim().toLowerCase();
 
+  // Langkah 1: minta kode OTP ke email baru.
   async function handleRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -49,6 +61,7 @@ export default function EmailSection({
 
     setLoading(true);
 
+    // Kirim permintaan ke server.
     const result = await postJson("/api/auth/change-email/request", {
       newEmail: normalizedEmail,
       password,
@@ -63,9 +76,11 @@ export default function EmailSection({
 
     setSuccess(result.message);
     setPassword("");
+    // Berhasil: lanjut ke langkah memasukkan kode.
     setStep("verify");
   }
 
+  // Langkah 2: kirim kode OTP untuk menyelesaikan penggantian email.
   async function handleConfirm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -74,6 +89,7 @@ export default function EmailSection({
     setError("");
     setSuccess("");
 
+    // Kode harus 6 digit.
     if (code.length !== 6) {
       setError("Masukkan 6 digit kode verifikasi.");
       return;
@@ -81,6 +97,7 @@ export default function EmailSection({
 
     setLoading(true);
 
+    // Kirim kode ke server.
     const result = await postJson("/api/auth/change-email/confirm", {
       newEmail: normalizedEmail,
       code,
@@ -98,6 +115,7 @@ export default function EmailSection({
     setNewEmail("");
     setCode("");
 
+    // Muat ulang data server agar email baru tampil di navbar.
     router.refresh();
   }
 
@@ -113,6 +131,7 @@ export default function EmailSection({
         Email hanya dapat diganti seminggu sekali dan perlu verifikasi kode.
       </p>
 
+      {/* Tampilkan form langkah 1 atau langkah 2. */}
       {step === "form" ? (
         <form onSubmit={handleRequest} className="space-y-3">
           <div>

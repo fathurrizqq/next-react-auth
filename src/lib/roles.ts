@@ -1,21 +1,17 @@
+// roles.ts
+// Daftar role pengguna dan label tampilannya.
+
+// Role yang ada di sistem (sama dengan enum UserRole di prisma/schema.prisma).
 export const USER_ROLES = [
   "USER",
   "ADMIN",
   "SUPER_ADMIN",
 ] as const;
 
+// Tipe TypeScript dari role: "USER" | "ADMIN" | "SUPER_ADMIN".
 export type UserRole = (typeof USER_ROLES)[number];
 
-export const ADMIN_MANAGEMENT_ROLES = [
-  "USER",
-  "ADMIN",
-  "SUPER_ADMIN",
-] as const;
-
-export function isUserRole(value: string): value is UserRole {
-  return USER_ROLES.includes(value as UserRole);
-}
-
+// Mengubah nama role di database menjadi teks yang enak dibaca di layar.
 export function getRoleLabel(role: string): string {
   switch (role) {
     case "SUPER_ADMIN":
@@ -27,6 +23,7 @@ export function getRoleLabel(role: string): string {
     case "USER":
       return "User";
 
+    // Role yang tidak dikenal ditampilkan apa adanya.
     default:
       return role;
   }

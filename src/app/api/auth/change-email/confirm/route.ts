@@ -1,3 +1,6 @@
+// POST /api/auth/change-email/confirm
+// Langkah 2 ganti email: cocokkan OTP dari email baru, lalu ganti email akun.
+
 import { z } from "zod";
 
 import { prisma } from "@/src/lib/prisma";
@@ -20,37 +23,47 @@ import {
 } from "@/src/lib/change-limit";
 import { emailSchema, otpCodeSchema } from "@/src/lib/validation";
 
+// Aturan data: email baru dan kode OTP 6 digit.
 const schema = z.object({
   newEmail: emailSchema,
   code: otpCodeSchema,
 });
 
+// Alur: cek origin -> login -> rate limit -> validasi -> cek batas seminggu
+// -> cocokkan OTP -> ganti email -> keluarkan perangkat lain -> catat & beri tahu.
 export async function POST(request: Request) {
   try {
+    // Proteksi CSRF: tolak request yang tidak berasal dari website ini.
     const originError = requireSameOrigin(request);
 
     if (originError) {
       return originError;
     }
 
+    // Ambil sesi dari cookie. null = belum login atau sesi sudah habis.
     const session = await getSession();
 
+    // Belum login -> 401.
     if (!session) {
       return unauthorized();
     }
 
+    // Maksimal 10 percobaan per user dalam 15 menit.
     const limit = rateLimit(
       `change-email-confirm:${session.userId}`,
       10,
       15 * 60 * 1000,
     );
 
+    // Melebihi batas -> 429 (Too Many Requests).
     if (!limit.success) {
       return tooManyRequests();
     }
 
+    // Validasi isi request dengan zod (tidak melempar error jika salah).
     const result = schema.safeParse(await readJson(request));
 
+    // Data tidak sesuai aturan -> 400 beserta pesan error per field.
     if (!result.success) {
       return jsonResponse(
         {
@@ -61,8 +74,10 @@ export async function POST(request: Request) {
       );
     }
 
+    // Data yang sudah bersih dan tervalidasi.
     const { newEmail, code } = result.data;
 
+    // Ambil data user dari database.
     const user = await prisma.user.findUnique({
       where: { id: session.userId },
       select: {
@@ -73,12 +88,15 @@ export async function POST(request: Request) {
       },
     });
 
+    // Akun tidak ditemukan atau sudah dinonaktifkan -> permintaan ditolak.
     if (!user || !user.isActive) {
       return unauthorized();
     }
 
+    // Cek batas ganti seminggu sekali. nextDate terisi bila belum boleh.
     const nextDate = getNextChangeDate(user.emailChangedAt);
 
+    // Belum lewat seminggu sejak perubahan terakhir -> 429.
     if (nextDate) {
       return jsonResponse(
         { message: formatChangeLimitMessage("Email", nextDate) },
@@ -86,6 +104,7 @@ export async function POST(request: Request) {
       );
     }
 
+    // Cocokkan kode OTP (sekali pakai, maksimal 5 percobaan).
     const verified = await verifyOtp({
       purpose: "CHANGE_EMAIL",
       email: newEmail,
@@ -93,6 +112,7 @@ export async function POST(request: Request) {
       userId: user.id,
     });
 
+    // OTP salah / kedaluwarsa -> 400 (pesan sengaja tidak membedakan penyebabnya).
     if (!verified) {
       return jsonResponse(
         { message: "Kode tidak valid atau sudah kedaluwarsa." },
@@ -100,14 +120,20 @@ export async function POST(request: Request) {
       );
     }
 
+    // Simpan email lama untuk dikirimi pemberitahuan.
     const oldEmail = user.email;
 
+    // Simpan email baru. Kolom email bersifat unik, jadi bisa gagal bila
+    // diambil user lain pada saat yang sama.
     try {
+      // Beberapa query sekaligus: semua berhasil atau semuanya dibatalkan.
       await prisma.$transaction([
         prisma.user.update({
           where: { id: user.id },
+          // Ganti email dan catat waktu penggantian (dasar batas seminggu sekali).
           data: { email: newEmail, emailChangedAt: new Date() },
         }),
+        // Keluarkan semua perangkat lain; sesi yang sedang dipakai tetap hidup.
         prisma.session.deleteMany({
           where: {
             userId: user.id,
@@ -116,13 +142,16 @@ export async function POST(request: Request) {
         }),
       ]);
     } catch (error) {
+      // Email sudah dipakai -> 409.
       if (isUniqueConstraintError(error)) {
         return jsonResponse({ message: "Email sudah digunakan." }, 409);
       }
 
+      // Error lain dilempar ke catch terluar -> 500.
       throw error;
     }
 
+    // Catat ke log aktivitas (tampil di halaman User Management).
     await logActivity({
       request,
       action: "EMAIL_CHANGED",
@@ -144,6 +173,7 @@ export async function POST(request: Request) {
       email: newEmail,
     });
   } catch (error) {
+    // Catat detail error di log server saja; user hanya menerima pesan umum.
     console.error("CHANGE_EMAIL_CONFIRM_ERROR:", error);
 
     return jsonResponse({ message: "Terjadi kesalahan pada server." }, 500);

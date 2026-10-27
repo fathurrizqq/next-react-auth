@@ -1,3 +1,6 @@
+// ProfileSection.tsx
+// Ubah nama dan foto profil (memanggil POST /api/auth/profile).
+
 "use client";
 
 import Image from "next/image";
@@ -7,6 +10,7 @@ import { useRouter } from "next/navigation";
 import Alert from "@/src/app/components/Alert";
 import { getRoleLabel } from "@/src/lib/roles";
 
+// Data user yang ditampilkan.
 type ProfileSectionProps = {
   user: {
     name: string;
@@ -15,54 +19,72 @@ type ProfileSectionProps = {
   };
 };
 
+// Tipe foto yang diizinkan (dicek lagi di server).
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
+// Ukuran foto maksimal 2 MB.
 const MAX_AVATAR_SIZE = 2 * 1024 * 1024;
 
+// Form nama + foto profil.
 export default function ProfileSection({ user }: ProfileSectionProps) {
   const router = useRouter();
 
+  // Isi kolom nama.
   const [name, setName] = useState(user.name);
+  // File foto baru yang dipilih (null = tidak ganti foto).
   const [file, setFile] = useState<File | null>(null);
+  // Gambar pratinjau: foto lama atau foto yang baru dipilih.
   const [preview, setPreview] = useState<string | null>(user.avatar);
 
+  // true saat proses simpan berjalan.
   const [loading, setLoading] = useState(false);
+  // Pesan error.
   const [error, setError] = useState("");
+  // Pesan sukses.
   const [success, setSuccess] = useState("");
 
+  // Saat user memilih foto: cek tipe & ukuran, lalu tampilkan pratinjau.
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0];
 
     if (!selected) return;
 
+    // Tipe tidak diizinkan.
     if (!ALLOWED_TYPES.includes(selected.type)) {
       setError("Format foto harus JPG, PNG, atau WEBP.");
       event.target.value = "";
       return;
     }
 
+    // Ukuran terlalu besar.
     if (selected.size > MAX_AVATAR_SIZE) {
       setError("Ukuran foto maksimal 2 MB.");
       event.target.value = "";
       return;
     }
 
+    // Bebaskan memori dari pratinjau sebelumnya.
     if (preview?.startsWith("blob:")) {
       URL.revokeObjectURL(preview);
     }
 
     setError("");
     setFile(selected);
+    // Buat URL sementara untuk menampilkan foto yang dipilih.
     setPreview(URL.createObjectURL(selected));
   }
 
+  // Simpan perubahan: validasi singkat lalu kirim ke server.
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    // Cegah browser memuat ulang halaman saat form dikirim.
     event.preventDefault();
 
+    // Abaikan jika proses sebelumnya masih berjalan.
     if (loading) return;
 
     setError("");
     setSuccess("");
 
+    // Validasi singkat di browser (server tetap memvalidasi ulang).
     if (name.trim().length < 4) {
       setError("Nama minimal 4 karakter.");
       return;
@@ -71,10 +93,12 @@ export default function ProfileSection({ user }: ProfileSectionProps) {
     setLoading(true);
 
     try {
+      // Foto dikirim sebagai multipart form, bukan JSON.
       const formData = new FormData();
 
       formData.append("name", name.trim());
 
+      // Sertakan foto hanya jika user memilih foto baru.
       if (file) {
         formData.append("avatar", file);
       }
@@ -97,6 +121,7 @@ export default function ProfileSection({ user }: ProfileSectionProps) {
 
       setSuccess("Profile berhasil diperbarui.");
       setFile(null);
+      // Muat ulang data server agar navbar menampilkan nama/foto terbaru.
       router.refresh();
     } catch {
       setError("Tidak dapat terhubung ke server.");

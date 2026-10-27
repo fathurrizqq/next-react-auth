@@ -1,3 +1,8 @@
+// users/page.tsx
+// Halaman User Management (khusus Super Admin).
+// Kiri (70%): daftar user dikelompokkan per role + akun yang menunggu aktivasi.
+// Kanan (30%): log aktivitas. Data diperbarui otomatis tiap 20 detik.
+
 "use client";
 
 import Image from "next/image";
@@ -9,8 +14,10 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 
+// Role yang tersedia (sama dengan enum UserRole di database).
 type UserRole = "USER" | "ADMIN" | "SUPER_ADMIN";
 
+// Data satu user dari GET /api/admin/users.
 type User = {
   id: string;
   name: string;
@@ -21,6 +28,7 @@ type User = {
   lastSeen: string | null;
 };
 
+// Data satu baris log dari GET /api/admin/activity-logs.
 type ActivityLog = {
   id: string;
   action: string;
@@ -38,8 +46,11 @@ const ONLINE_THRESHOLD = 60 * 1000;
 // Data user dan log diperbarui setiap 20 detik.
 const REFRESH_INTERVAL = 20 * 1000;
 
+// Jumlah log yang dimuat per halaman.
 const LOG_PAGE_SIZE = 30;
 
+// Label dan warna badge untuk tiap jenis aktivitas.
+// Jenis yang tidak terdaftar ditampilkan apa adanya.
 const ACTION_STYLES: Record<
   string,
   { label: string; className: string }
@@ -86,6 +97,7 @@ const ACTION_STYLES: Record<
   },
 };
 
+// User dianggap online jika lastSeen-nya masih dalam ONLINE_THRESHOLD.
 function isUserOnline(lastSeen: string | null) {
   if (!lastSeen) {
     return false;
@@ -100,6 +112,7 @@ function isUserOnline(lastSeen: string | null) {
   return Date.now() - lastSeenTime <= ONLINE_THRESHOLD;
 }
 
+// Format waktu log: tanggal + jam, zona Jakarta.
 function formatLogTime(value: string) {
   return new Date(value).toLocaleString("id-ID", {
     dateStyle: "short",
@@ -108,6 +121,7 @@ function formatLogTime(value: string) {
   });
 }
 
+// Komponen halaman User Management.
 export default function UserManagementPage() {
   const router = useRouter();
 
@@ -115,8 +129,11 @@ export default function UserManagementPage() {
   // USERS
   // =========================================
 
+  // Semua user dari server.
   const [users, setUsers] = useState<User[]>([]);
+  // true sampai data user pertama selesai dimuat.
   const [loading, setLoading] = useState(true);
+  // Pesan error halaman.
   const [error, setError] = useState("");
 
   // Id user yang sedang diaktifkan / dihapus.
@@ -126,10 +143,14 @@ export default function UserManagementPage() {
   // EDIT MODAL
   // =========================================
 
+  // User yang sedang diedit (null = modal tertutup).
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  // true saat perubahan sedang disimpan.
   const [saving, setSaving] = useState(false);
+  // Pesan error di dalam modal.
   const [modalError, setModalError] = useState("");
 
+  // Isian form edit: nama, email, role, dan status aktif.
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editRole, setEditRole] = useState<UserRole>("USER");
@@ -139,10 +160,15 @@ export default function UserManagementPage() {
   // ACTIVITY LOGS
   // =========================================
 
+  // Daftar log yang sudah dimuat.
   const [logs, setLogs] = useState<ActivityLog[]>([]);
+  // true sampai log pertama selesai dimuat.
   const [logsLoading, setLogsLoading] = useState(true);
+  // Pesan error khusus panel log.
   const [logsError, setLogsError] = useState("");
+  // Cursor halaman log berikutnya (null = sudah habis).
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  // true saat "Muat lebih banyak" berjalan.
   const [loadingMore, setLoadingMore] = useState(false);
 
   // Cursor halaman berikutnya hanya ditentukan oleh load pertama.
@@ -153,6 +179,7 @@ export default function UserManagementPage() {
   // LOAD DATA
   // =========================================
 
+  // Ambil daftar user dari server.
   const loadUsers = useCallback(async () => {
     try {
       const response = await fetch("/api/admin/users", {
@@ -164,6 +191,7 @@ export default function UserManagementPage() {
 
       if (!response.ok) {
         if (response.status === 401) {
+          // Sesi habis -> kembali ke halaman login.
           router.push("/login");
           return;
         }
@@ -189,6 +217,7 @@ export default function UserManagementPage() {
     }
   }, [router]);
 
+  // Ambil log terbaru; log baru ditaruh di atas yang sudah ada (tanpa duplikat).
   const refreshLogs = useCallback(async () => {
     try {
       const response = await fetch(
@@ -214,6 +243,7 @@ export default function UserManagementPage() {
       const incoming: ActivityLog[] = data.logs ?? [];
 
       setLogs((previous) => {
+        // Kumpulan id log yang sudah ada, untuk mencegah duplikat.
         const known = new Set(previous.map((log) => log.id));
 
         return [
@@ -237,10 +267,12 @@ export default function UserManagementPage() {
     }
   }, []);
 
+  // Muat ulang user dan log sekaligus.
   const refreshAll = useCallback(async () => {
     await Promise.all([loadUsers(), refreshLogs()]);
   }, [loadUsers, refreshLogs]);
 
+  // Muat data saat halaman dibuka, lalu ulangi tiap 20 detik saat tab terlihat.
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       void refreshAll();
@@ -258,6 +290,7 @@ export default function UserManagementPage() {
     };
   }, [refreshAll]);
 
+  // Muat log yang lebih lama memakai cursor.
   async function handleLoadMoreLogs() {
     if (!nextCursor || loadingMore) {
       return;
@@ -310,6 +343,7 @@ export default function UserManagementPage() {
   // EDIT MODAL
   // =========================================
 
+  // Buka modal edit dan isi form dengan data user.
   function openEditModal(user: User) {
     setSelectedUser(user);
     setEditName(user.name);
@@ -319,6 +353,7 @@ export default function UserManagementPage() {
     setModalError("");
   }
 
+  // Tutup modal (diabaikan saat sedang menyimpan).
   function closeEditModal() {
     if (saving) {
       return;
@@ -328,6 +363,7 @@ export default function UserManagementPage() {
     setModalError("");
   }
 
+  // Simpan perubahan user (PATCH ke server).
   async function handleUpdateUser() {
     if (!selectedUser || saving) {
       return;
@@ -392,6 +428,7 @@ export default function UserManagementPage() {
   // ACTIVATE / DELETE
   // =========================================
 
+  // Aktifkan akun (dipakai untuk akun yang menunggu aktivasi).
   async function handleActivateUser(user: User) {
     if (busyId) {
       return;
@@ -438,6 +475,7 @@ export default function UserManagementPage() {
     }
   }
 
+  // Hapus user setelah konfirmasi.
   async function handleDeleteUser(user: User) {
     if (busyId) {
       return;
@@ -479,8 +517,10 @@ export default function UserManagementPage() {
   // GROUP USERS
   // =========================================
 
+  // Pengelompokan: akun nonaktif / menunggu aktivasi ditaruh paling atas.
   const inactiveUsers = users.filter((user) => !user.isActive);
 
+  // Lalu akun aktif dikelompokkan per role.
   const superAdmins = users.filter(
     (user) => user.isActive && user.role === "SUPER_ADMIN",
   );
@@ -493,12 +533,14 @@ export default function UserManagementPage() {
     (user) => user.isActive && user.role === "USER",
   );
 
+  // Matikan semua tombol aksi saat ada proses yang berjalan.
   const actionsDisabled = busyId !== null || saving;
 
   // =========================================
   // USER SECTION
   // =========================================
 
+  // Menggambar satu kartu daftar user (judul + daftar user).
   function renderSection(
     title: string,
     sectionUsers: User[],
@@ -629,6 +671,7 @@ export default function UserManagementPage() {
   // ACTIVITY LOG PANEL
   // =========================================
 
+  // Menggambar panel log aktivitas di sisi kanan.
   function renderLogs() {
     return (
       <section className="rounded-xl bg-white p-5 shadow-sm lg:sticky lg:top-6">
@@ -731,6 +774,7 @@ export default function UserManagementPage() {
   // RENDER
   // =========================================
 
+  // Tampilan halaman: kiri daftar user, kanan log aktivitas, lalu modal edit.
   return (
     <main className="min-h-screen bg-slate-100">
       <div className="mx-auto max-w-7xl px-6 py-8">
@@ -754,6 +798,7 @@ export default function UserManagementPage() {
           </button>
         </div>
 
+        {/* Pesan error halaman. */}
         {error && (
           <div className="mb-6 rounded-lg bg-red-50 p-3 text-sm text-red-600">
             {error}

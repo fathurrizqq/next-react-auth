@@ -1,3 +1,6 @@
+// avatar.ts
+// Lokasi penyimpanan foto profil di disk.
+
 import path from "path";
 
 /*
@@ -6,12 +9,16 @@ import path from "path";
  */
 export const AVATAR_DIR = path.join(process.cwd(), "uploads", "avatars");
 
+// Ubah URL avatar yang tersimpan di database menjadi lokasi file di disk
+// (dipakai untuk menghapus foto lama). Mengembalikan null bila bukan avatar lokal.
 export function resolveAvatarPath(url: string | null): string | null {
   if (!url) {
     return null;
   }
 
+  // Format baru: file ada di folder uploads/avatars.
   if (url.startsWith("/api/avatars/")) {
+    // path.basename membuang bagian folder, sehingga tidak bisa keluar dari folder avatar.
     return path.join(AVATAR_DIR, path.basename(url));
   }
 

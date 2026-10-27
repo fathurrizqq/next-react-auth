@@ -3,21 +3,25 @@
 
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
+// Pembuat Prisma Client; hasilnya ditulis ke src/generated/prisma.
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
 }
 
+// Database yang dipakai (alamatnya dari DATABASE_URL di .env / prisma.config).
 datasource db {
   provider = "postgresql"
 }
 
+// Role pengguna: USER (biasa), ADMIN, SUPER_ADMIN (mengelola semua user).
 enum UserRole {
   ADMIN
   SUPER_ADMIN
   USER
 }
 
+// Tujuan kode OTP: registrasi, reset password, ganti password, ganti email.
 enum OtpPurpose {
   REGISTER
   RESET_PASSWORD
@@ -25,20 +29,25 @@ enum OtpPurpose {
   CHANGE_EMAIL
 }
 
+// Tabel user / akun.
 model User {
   id           String   @id @default(uuid())
   name         String
   email        String   @unique
+  // Hash bcrypt dari password. Password asli tidak pernah disimpan.
   passwordHash String
   role         UserRole @default(USER)
   avatar       String?
+  // false = akun belum aktif / dinonaktifkan (tidak bisa login).
   isActive     Boolean  @default(true)
+  // Terakhir terlihat online (diperbarui oleh heartbeat dashboard).
   lastSeen     DateTime?
 
   // Untuk batas ganti password / email seminggu sekali.
   passwordChangedAt DateTime?
   emailChangedAt    DateTime?
 
+  // Relasi: sesi login, kode OTP, dan log aktivitas milik user ini.
   sessions     Session[]
   otpCodes     OtpCode[]
   activityLogs ActivityLog[]
@@ -49,10 +58,13 @@ model User {
 
 model Session {
   id        String   @id @default(uuid())
+  // Hash token cookie (token asli hanya ada di browser).
   tokenHash String   @unique
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Info browser/perangkat saat login.
   userAgent String?
+  // Kapan sesi berakhir (3 jam setelah login).
   expiresAt DateTime
   createdAt DateTime @default(now())
 
@@ -60,12 +72,16 @@ model Session {
   @@index([expiresAt])
 }
 
+// Tabel kode OTP sementara (dihapus saat dipakai / kedaluwarsa).
 model OtpCode {
   id        String     @id @default(uuid())
   purpose   OtpPurpose
   email     String
+  // Hash HMAC dari kode OTP (kode asli tidak disimpan).
   codeHash  String
+  // Data tambahan, mis. nama & hash password calon user saat registrasi.
   payload   Json?
+  // Jumlah percobaan salah; terkunci setelah 5 kali.
   attempts  Int        @default(0)
   userId    String?
   user      User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -76,11 +92,14 @@ model OtpCode {
   @@index([expiresAt])
 }
 
+// Tabel log aktivitas (otomatis dihapus setelah 7 hari).
 model ActivityLog {
   id         String   @id @default(uuid())
+  // Jenis aktivitas, mis. LOGIN, PASSWORD_CHANGED.
   action     String
   actorId    String?
   actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  // Email pelaku, disimpan terpisah agar log tetap terbaca walau user dihapus.
   actorEmail String?
   targetId   String?
   detail     String?

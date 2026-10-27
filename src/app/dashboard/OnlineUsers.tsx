@@ -1,3 +1,7 @@
+// OnlineUsers.tsx
+// Deretan foto user yang sedang online di navbar.
+// Sekaligus mengirim "heartbeat" tiap 20 detik supaya user ini sendiri tercatat online.
+
 "use client";
 
 import Image from "next/image";
@@ -9,6 +13,7 @@ import {
 
 import { getRoleLabel } from "@/src/lib/roles";
 
+// Data satu user online dari API.
 type OnlineUser = {
   id: string;
   name: string;
@@ -17,13 +22,17 @@ type OnlineUser = {
   lastSeen: string | null;
 };
 
+// currentUserId dipakai untuk memberi label "(Anda)".
 type OnlineUsersProps = {
   currentUserId: string;
 };
 
+// Maksimal foto yang ditampilkan; sisanya jadi angka "+N".
 const MAX_VISIBLE_USERS = 5;
+// Heartbeat dan refresh setiap 20 detik.
 const REFRESH_INTERVAL = 20_000;
 
+// Huruf pertama nama (untuk pengganti foto).
 function getInitial(name: string) {
   return (
     name.trim().charAt(0).toUpperCase() ||
@@ -31,16 +40,21 @@ function getInitial(name: string) {
   );
 }
 
+// Komponen daftar user online.
 export default function OnlineUsers({
   currentUserId,
 }: OnlineUsersProps) {
+  // Daftar user yang sedang online.
   const [users, setUsers] = useState<OnlineUser[]>(
     [],
   );
 
+  // true sebelum data pertama selesai dimuat.
   const [loading, setLoading] =
     useState(true);
 
+  // Dua langkah: (1) POST = catat bahwa saya online (heartbeat),
+  // (2) GET = ambil daftar semua yang online.
   const refreshOnlineStatus =
     useCallback(async () => {
       try {
@@ -52,6 +66,7 @@ export default function OnlineUsers({
           },
         );
 
+        // Ambil daftar user online.
         const response = await fetch(
           "/api/dashboard/users/online",
           {
@@ -60,6 +75,7 @@ export default function OnlineUsers({
           },
         );
 
+        // Server menolak (mis. sesi habis) -> dianggap error.
         if (!response.ok) {
           throw new Error(
             `Request gagal: ${response.status}`,
@@ -81,11 +97,14 @@ export default function OnlineUsers({
       }
     }, []);
 
+  // Jalankan refresh saat tampil, lalu berulang tiap 20 detik.
   useEffect(() => {
+    // Refresh pertama dijalankan segera setelah komponen tampil.
     const timeoutId = window.setTimeout(() => {
       void refreshOnlineStatus();
     }, 0);
 
+    // Refresh berkala, hanya saat tab sedang terlihat (hemat request).
     const intervalId = window.setInterval(() => {
       if (
         document.visibilityState ===
@@ -95,6 +114,7 @@ export default function OnlineUsers({
       }
     }, REFRESH_INTERVAL);
 
+    // Saat user kembali ke tab ini, langsung refresh.
     function handleVisibilityChange() {
       if (
         document.visibilityState ===
@@ -109,6 +129,7 @@ export default function OnlineUsers({
       handleVisibilityChange,
     );
 
+    // Bersihkan timer dan listener saat komponen dilepas.
     return () => {
       window.clearTimeout(timeoutId);
       window.clearInterval(intervalId);
@@ -120,16 +141,19 @@ export default function OnlineUsers({
     };
   }, [refreshOnlineStatus]);
 
+  // User yang fotonya ditampilkan.
   const visibleUsers = users.slice(
     0,
     MAX_VISIBLE_USERS,
   );
 
+  // Jumlah user yang tidak muat (ditampilkan sebagai "+N").
   const remainingUsers = Math.max(
     users.length - MAX_VISIBLE_USERS,
     0,
   );
 
+  // Tampilan sementara saat data pertama dimuat.
   if (loading && users.length === 0) {
     return (
       <div
@@ -141,6 +165,7 @@ export default function OnlineUsers({
     );
   }
 
+  // Tidak ada yang online.
   if (users.length === 0) {
     return (
       <div className="flex items-center">
@@ -160,6 +185,7 @@ export default function OnlineUsers({
       <div className="flex items-center">
         {visibleUsers.map(
           (user, index) => {
+            // Apakah user ini adalah yang sedang login.
             const isCurrentUser =
               user.id === currentUserId;
 

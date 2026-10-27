@@ -1,3 +1,7 @@
+// CodeInput.tsx
+// Input kode verifikasi (OTP) 6 digit.
+
+// Props: id input, nilai, fungsi saat berubah, dan status disabled.
 type CodeInputProps = {
   id: string;
   value: string;
@@ -5,6 +9,7 @@ type CodeInputProps = {
   disabled?: boolean;
 };
 
+// Kolom kode verifikasi yang hanya menerima angka.
 export default function CodeInput({
   id,
   value,
@@ -23,11 +28,15 @@ export default function CodeInput({
       <input
         id={id}
         type="text"
+        // Di HP muncul keyboard angka.
         inputMode="numeric"
+        // Browser/HP bisa menyarankan kode OTP dari pesan yang masuk.
         autoComplete="one-time-code"
+        // Maksimal 6 digit.
         maxLength={6}
         value={value}
         onChange={(event) =>
+          // Buang semua karakter selain angka.
           onChange(event.target.value.replace(/\D/g, ""))
         }
         disabled={disabled}
